@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  --color-slate-900: #0f172a;
+  --color-slate-700: #334155;
+  --color-slate-600: #475569;
+}
+
+/* Base styles are applied directly without the @layer wrapper in v4 */
+body {
+  @apply bg-slate-900;
+}
+
+/* Custom Scrollbar for sleek UI */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-700 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-600;
+}
