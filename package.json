@@ -1,0 +1,37 @@
+{
+  "name": "jarvis-desktop",
+  "version": "1.0.0",
+  "description": "Standalone Desktop wrapper for Jarvis OS Assistant",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:frontend": "npm --prefix frontend run build",
+    "dist": "electron-packager . Jarvis --platform=win32 --arch=x64 --out=dist --overwrite --extra-resource=backend/dist/main --ignore=backend/dist --ignore=backend/build --ignore=frontend/node_modules --ignore=frontend/src"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "electron-packager": "^17.1.2"
+  },
+  "build": {
+    "appId": "com.jarvis.desktop",
+    "productName": "Jarvis",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "frontend/dist/**/*"
+    ],
+    "win": {
+      "target": "dir"
+    },
+    "extraResources": [
+      {
+        "from": "backend/dist/main",
+        "to": "backend"
+      }
+    ]
+  }
+}

@@ -1,6 +1,9 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+import ollama
+import json
+from pydantic import ValidationError
 
 import database
 import models
@@ -26,51 +29,73 @@ def on_startup():
 def read_root():
     return {"message": "Jarvis Backend is running!"}
 
-def simple_nlp_intent_matcher(user_input: str):
+def parse_intent_with_llm(user_input: str) -> models.LLMIntent:
     """
-    A basic intent matching function.
-    In a fully fleshed out AI model, this would be an LLM call or a trained intent classifier.
+    Calls the local Ollama LLM to parse natural language intent.
+    Enforces a strict Pydantic JSON schema format.
     """
-    ui = user_input.lower()
-    if "open" in ui or "launch" in ui or "start" in ui:
-        return "launch_app"
-    elif "screenshot" in ui or "capture" in ui:
-        return "take_screenshot"
-    elif "volume up" in ui or "increase volume" in ui:
-        return "volume_up"
-    elif "volume down" in ui or "decrease volume" in ui:
-        return "volume_down"
-    elif "mute" in ui:
-        return "volume_mute"
-    elif "play" in ui or "pause" in ui:
-        return "play_pause"
-    else:
-        return "unknown"
-
-def extract_app_alias(user_input: str) -> str:
-    """Extracts the potential app name from the launch command."""
-    ui = user_input.lower()
-    for verb in ["open", "launch", "start"]:
-        if verb in ui:
-            # simple logic: get the word after the verb
-            parts = ui.split(verb)
-            if len(parts) > 1:
-                return parts[1].strip()
-    return ""
+    try:
+        response = ollama.chat(
+            model='llama3.2:latest',
+            messages=[
+                {
+                    'role': 'system',
+                    'content': (
+                        "You are a precise OS assistant intent parser. Your goal is to map user commands to the system intent.\n"
+                        "Classify the user input into one of the following intents:\n"
+                        "- open_app: user wants to launch/open/start an application (e.g. notepad, calculator, paint, browser)\n"
+                        "- screenshot: user wants to capture/take a screenshot\n"
+                        "- system_query: user wants to perform other actions like adjusting volume (volume_up, volume_down, volume_mute) or media playback (play_pause)\n\n"
+                        "For open_app, set target_param to the name of the app (e.g. 'notepad', 'calculator').\n"
+                        "For system_query, set target_param to the specific system action (e.g. 'volume_up', 'volume_down', 'volume_mute', 'play_pause').\n"
+                        "For screenshot, set target_param to null.\n"
+                        "Only output raw valid JSON adhering to the specified schema."
+                    )
+                },
+                {
+                    'role': 'user',
+                    'content': user_input
+                }
+            ],
+            format=models.LLMIntent.model_json_schema()
+        )
+        content = response.message.content
+        parsed_intent = models.LLMIntent.model_validate_json(content)
+        return parsed_intent
+    except (ValidationError, json.JSONDecodeError) as val_err:
+        print(f"LLM output validation failed: {val_err}. Content: {content}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"LLM failed to output a valid intent schema. Error: {str(val_err)}"
+        )
+    except Exception as e:
+        print(f"Failed to query LLM: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"LLM parsing service error: {str(e)}"
+        )
 
 @app.post("/api/execute", response_model=models.ExecuteResponse)
 def execute_command(req: models.ExecuteRequest, db: Session = Depends(database.get_db)):
     user_input = req.user_input
     
-    # 1. Determine intent
-    intent = simple_nlp_intent_matcher(user_input)
+    # 1. Determine intent via LLM router
+    try:
+        parsed_llm_intent = parse_intent_with_llm(user_input)
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal LLM processing error: {str(e)}")
+        
+    intent = parsed_llm_intent.intent
+    target_param = parsed_llm_intent.target_param
     
     response_msg = ""
     status = "pending"
     
     # 2. Execute Action based on Intent
-    if intent == "launch_app":
-        app_alias = extract_app_alias(user_input)
+    if intent == "open_app":
+        app_alias = target_param.strip().lower() if target_param else ""
         if not app_alias:
             status, response_msg = "error", "Could not determine which application to launch."
         else:
@@ -101,16 +126,39 @@ def execute_command(req: models.ExecuteRequest, db: Session = Depends(database.g
                 status = "error"
                 response_msg = f"Application '{app_alias}' not found in mappings."
                 
-    elif intent == "take_screenshot":
+    elif intent == "screenshot":
         result = os_tools.take_screenshot()
         status = result["status"]
         response_msg = result["message"]
         
-    elif intent in ["volume_up", "volume_down", "volume_mute", "play_pause"]:
-        result = os_tools.adjust_media_controls(intent)
-        status = result["status"]
-        response_msg = result["message"]
+    elif intent == "system_query":
+        valid_media_actions = ["volume_up", "volume_down", "volume_mute", "play_pause"]
+        action_mapping = {
+            "mute": "volume_mute",
+            "volume_mute": "volume_mute",
+            "volume mute": "volume_mute",
+            "up": "volume_up",
+            "volume_up": "volume_up",
+            "volume up": "volume_up",
+            "down": "volume_down",
+            "volume_down": "volume_down",
+            "volume down": "volume_down",
+            "play": "play_pause",
+            "pause": "play_pause",
+            "play_pause": "play_pause",
+            "play pause": "play_pause"
+        }
         
+        normalized_action = action_mapping.get(target_param.lower()) if target_param else None
+        
+        if normalized_action in valid_media_actions:
+            result = os_tools.adjust_media_controls(normalized_action)
+            status = result["status"]
+            response_msg = result["message"]
+        else:
+            status = "error"
+            response_msg = f"System command '{target_param}' not recognized or unsupported."
+            
     else:
         status = "error"
         response_msg = "Unknown command or intent not recognized."
@@ -126,7 +174,6 @@ def execute_command(req: models.ExecuteRequest, db: Session = Depends(database.g
         db.add(log_entry)
         db.commit()
     except Exception as e:
-        # If DB is not set up correctly, we still return the execution result, but maybe log a warning
         print(f"Failed to save log to DB: {e}")
 
     return models.ExecuteResponse(
