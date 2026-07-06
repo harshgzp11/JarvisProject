@@ -18,3 +18,9 @@ backend/build/
 
 # Environment files containing secrets
 .env
+
+# Temporary runtime logs
+electron_err.txt
+electron_err_new.txt
+electron_out.txt
+electron_out_new.txt
