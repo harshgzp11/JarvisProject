@@ -1,12 +1,12 @@
 from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import ollama
 import json
 from pydantic import ValidationError
-from passlib.context import CryptContext
-import bcrypt
-import passlib.handlers.bcrypt
+from google.oauth2 import id_token
+from google.auth.transport import requests
 from jose import jwt
 from datetime import datetime, timedelta
 import os
@@ -28,16 +28,10 @@ app.add_middleware(
 )
 
 # Security Configurations
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", os.getenv("JWT_SECRET", "super-secret-key-change-in-production"))
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 120
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
@@ -73,35 +67,157 @@ def on_startup():
 def read_root():
     return {"message": "Jarvis Backend is running!"}
 
-@app.post("/api/auth/signup", response_model=models.AuthResponse)
-def signup(req: models.UserCreate, db: Session = Depends(database.get_db)):
-    # Duplicate email check
-    existing_user = db.query(database.User).filter(database.User.email == req.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email is already registered.")
-    
-    hashed_pwd = get_password_hash(req.password)
-    new_user = database.User(email=req.email, hashed_password=hashed_pwd)
-    
-    try:
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Database registration failure: {str(e)}")
-        
-    token = create_access_token(data={"sub": req.email})
-    return models.AuthResponse(status="success", message="User registered successfully.", token=token)
+@app.get("/api/auth/google/config")
+def get_google_config():
+    return {"client_id": GOOGLE_CLIENT_ID}
 
-@app.post("/api/auth/login", response_model=models.AuthResponse)
-def login(req: models.UserLogin, db: Session = Depends(database.get_db)):
-    user = db.query(database.User).filter(database.User.email == req.email).first()
-    if not user or not verify_password(req.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+@app.post("/api/auth/google/verify", response_model=models.AuthResponse)
+def verify_google_token(req: models.GoogleAuthRequest, db: Session = Depends(database.get_db)):
+    """
+    Verifies a Google OAuth2 ID token, provisions/updates the user record,
+    and returns a JWT session token for application authentication.
+    """
+    try:
+        # Verify OAuth2 token signature, expiration, and audience check if client ID is set
+        request_transport = requests.Request()
+        audience = GOOGLE_CLIENT_ID if GOOGLE_CLIENT_ID else None
         
-    token = create_access_token(data={"sub": req.email})
-    return models.AuthResponse(status="success", message="Login successful.", token=token)
+        idinfo = id_token.verify_oauth2_token(req.token, request_transport, audience)
+        
+        google_id = idinfo.get("sub")
+        email = idinfo.get("email")
+        full_name = idinfo.get("name")
+        picture_url = idinfo.get("picture")
+        
+        if not google_id or not email:
+            raise HTTPException(status_code=400, detail="Missing critical claims (Google ID or Email) in token.")
+        
+        # Check if user already exists with this google_id
+        user = db.query(database.User).filter(database.User.google_id == google_id).first()
+        if not user:
+            # Fallback check if user email is registered without a google_id (transition phase)
+            user = db.query(database.User).filter(database.User.email == email).first()
+            if user:
+                user.google_id = google_id
+                user.full_name = full_name
+                user.picture_url = picture_url
+            else:
+                user = database.User(
+                    google_id=google_id,
+                    email=email,
+                    full_name=full_name,
+                    picture_url=picture_url
+                )
+                db.add(user)
+            
+            try:
+                db.commit()
+                db.refresh(user)
+            except Exception as e:
+                db.rollback()
+                raise HTTPException(status_code=500, detail=f"Database transaction failure during provisioning: {str(e)}")
+        else:
+            # Sync user profile details if changed
+            updated = False
+            if user.full_name != full_name:
+                user.full_name = full_name
+                updated = True
+            if user.picture_url != picture_url:
+                user.picture_url = picture_url
+                updated = True
+            if updated:
+                try:
+                    db.commit()
+                    db.refresh(user)
+                except Exception:
+                    db.rollback()
+
+        # Generate custom application session token
+        session_token = create_access_token(data={"sub": user.email})
+        return models.AuthResponse(
+            status="success",
+            message="Google authentication handshake complete.",
+            token=session_token
+        )
+    except ValueError as val_err:
+        raise HTTPException(status_code=401, detail=f"Invalid Google ID token: {str(val_err)}")
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal authentication server error: {str(e)}")
+
+@app.get("/api/auth/google/callback", response_class=HTMLResponse)
+def google_callback():
+    """
+    Serves a simple HTML page that extracts the Google OAuth2 ID Token from the URL fragment
+    and sends it to the parent window (opener) via postMessage before closing.
+    """
+    html_content = """
+    <html>
+    <head>
+        <title>Authorizing Jarvis</title>
+        <style>
+            body {
+                background-color: #000000;
+                color: #ffffff;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+                margin: 0;
+            }
+            .card {
+                text-align: center;
+                border: 1px solid #27272a;
+                background-color: #09090b;
+                padding: 32px;
+                max-width: 320px;
+                border-radius: 0px;
+            }
+            h3 {
+                margin: 0 0 8px;
+                font-size: 14px;
+                font-weight: 600;
+                letter-spacing: 1px;
+                text-transform: uppercase;
+            }
+            p {
+                font-size: 11px;
+                color: #a1a1aa;
+                margin: 0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h3>Authorizing</h3>
+            <p>Completing system core authentication handshake...</p>
+        </div>
+        <script>
+            // Parse hash fragment
+            const hash = window.location.hash;
+            if (hash) {
+                const params = new URLSearchParams(hash.substring(1));
+                const idToken = params.get("id_token");
+                if (idToken) {
+                    if (window.opener) {
+                        window.opener.postMessage({ type: "GOOGLE_AUTH_SUCCESS", token: idToken }, "*");
+                    } else {
+                        // fallback if no opener is found
+                        document.querySelector("p").innerText = "Authentication completed. Close this window.";
+                    }
+                } else {
+                    document.querySelector("p").innerText = "No credentials received from Google. Please close and try again.";
+                }
+            } else {
+                document.querySelector("p").innerText = "Waiting for authorization hash redirection...";
+            }
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 @app.get("/api/auth/verify")
 def verify_token(

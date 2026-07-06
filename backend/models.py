@@ -1,13 +1,8 @@
 from pydantic import BaseModel, Field, EmailStr
 from typing import Literal, Optional
 
-class UserCreate(BaseModel):
-    email: EmailStr
-    password: str = Field(..., min_length=8)
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
+class GoogleAuthRequest(BaseModel):
+    token: str = Field(..., description="Google OAuth2 ID Token")
 
 class AuthResponse(BaseModel):
     status: str

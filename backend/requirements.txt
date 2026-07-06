@@ -8,3 +8,4 @@ pyautogui
 passlib[bcrypt]
 python-jose[cryptography]
 email-validator
+google-auth
