@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import ollama
@@ -27,59 +27,7 @@ app.add_middleware(
 
 # Security Configurations
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-SECRET_KEY = os.getenv("JWT_SECRET", "super-secret-key-change-me")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: timedelta = None):
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-
-@app.post("/api/auth/signup", response_model=models.AuthResponse)
-def signup(req: models.UserCreate, db: Session = Depends(database.get_db)):
-    existing_user = db.query(database.User).filter(database.User.email == req.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    hashed_pw = get_password_hash(req.password)
-    new_user = database.User(email=req.email, hashed_password=hashed_pw)
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
-    
-    return models.AuthResponse(status="success", message="User created successfully")
-
-@app.post("/api/auth/login", response_model=models.AuthResponse)
-def login(req: models.UserLogin, db: Session = Depends(database.get_db)):
-    user = db.query(database.User).filter(database.User.email == req.email).first()
-    if not user or not verify_password(req.password, user.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    
-    access_token = create_access_token(data={"sub": user.email})
-    return models.AuthResponse(status="success", message="Login successful", token=access_token)
-
-@app.on_event("startup")
-def on_startup():
-    # Attempt to initialize DB tables if they don't exist
-    database.init_db()
-
-@app.get("/")
-def read_root():
-    return {"message": "Jarvis Backend is running!"}
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "super-secret-key-change-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", os.getenv("JWT_SECRET", "super-secret-key-change-in-production"))
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 120
 
@@ -96,8 +44,32 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     else:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_current_user(authorization: Optional[str] = Header(None), db: Session = Depends(database.get_db)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authentication token.")
+    token = authorization.split(" ")[1]
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid token session.")
+        user = db.query(database.User).filter(database.User.email == email).first()
+        if user is None:
+            raise HTTPException(status_code=401, detail="User session not found.")
+        return user
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token session.")
+
+@app.on_event("startup")
+def on_startup():
+    # Attempt to initialize DB tables if they don't exist
+    database.init_db()
+
+@app.get("/")
+def read_root():
+    return {"message": "Jarvis Backend is running!"}
 
 @app.post("/api/auth/signup", response_model=models.AuthResponse)
 def signup(req: models.UserCreate, db: Session = Depends(database.get_db)):
@@ -130,11 +102,20 @@ def login(req: models.UserLogin, db: Session = Depends(database.get_db)):
     return models.AuthResponse(status="success", message="Login successful.", token=token)
 
 @app.get("/api/auth/verify")
-def verify_token(token: Optional[str] = None, db: Session = Depends(database.get_db)):
-    if not token:
-        raise HTTPException(status_code=400, detail="Token parameter is required.")
+def verify_token(
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = None,
+    db: Session = Depends(database.get_db)
+):
+    actual_token = token
+    if authorization and authorization.startswith("Bearer "):
+        actual_token = authorization.split(" ")[1]
+        
+    if not actual_token:
+        raise HTTPException(status_code=400, detail="Token is required.")
+        
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(actual_token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
             raise HTTPException(status_code=401, detail="Invalid token session.")
@@ -194,7 +175,11 @@ def parse_intent_with_llm(user_input: str) -> models.LLMIntent:
         )
 
 @app.post("/api/execute", response_model=models.ExecuteResponse)
-def execute_command(req: models.ExecuteRequest, db: Session = Depends(database.get_db)):
+def execute_command(
+    req: models.ExecuteRequest,
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(get_current_user)
+):
     user_input = req.user_input
     
     # 1. Determine intent via LLM router
@@ -299,3 +284,8 @@ def execute_command(req: models.ExecuteRequest, db: Session = Depends(database.g
         message=response_msg,
         intent=intent
     )
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+

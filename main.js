@@ -22,7 +22,7 @@ function startBackend() {
     const exePath = path.join(process.resourcesPath, 'main', 'main.exe');
     pyProc = spawn(exePath, [], {
       cwd: path.dirname(exePath),
-      shell: true
+      shell: false
     });
   }
 
