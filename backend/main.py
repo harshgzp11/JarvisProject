@@ -4,6 +4,11 @@ from sqlalchemy.orm import Session
 import ollama
 import json
 from pydantic import ValidationError
+from passlib.context import CryptContext
+from jose import jwt
+from datetime import datetime, timedelta
+import os
+from typing import Optional
 
 import database
 import models
@@ -20,6 +25,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Security Configurations
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+SECRET_KEY = os.getenv("JWT_SECRET", "super-secret-key-change-me")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+@app.post("/api/auth/signup", response_model=models.AuthResponse)
+def signup(req: models.UserCreate, db: Session = Depends(database.get_db)):
+    existing_user = db.query(database.User).filter(database.User.email == req.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    hashed_pw = get_password_hash(req.password)
+    new_user = database.User(email=req.email, hashed_password=hashed_pw)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return models.AuthResponse(status="success", message="User created successfully")
+
+@app.post("/api/auth/login", response_model=models.AuthResponse)
+def login(req: models.UserLogin, db: Session = Depends(database.get_db)):
+    user = db.query(database.User).filter(database.User.email == req.email).first()
+    if not user or not verify_password(req.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    access_token = create_access_token(data={"sub": user.email})
+    return models.AuthResponse(status="success", message="Login successful", token=access_token)
+
 @app.on_event("startup")
 def on_startup():
     # Attempt to initialize DB tables if they don't exist
@@ -28,6 +77,75 @@ def on_startup():
 @app.get("/")
 def read_root():
     return {"message": "Jarvis Backend is running!"}
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "super-secret-key-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 120
+
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+@app.post("/api/auth/signup", response_model=models.AuthResponse)
+def signup(req: models.UserCreate, db: Session = Depends(database.get_db)):
+    # Duplicate email check
+    existing_user = db.query(database.User).filter(database.User.email == req.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email is already registered.")
+    
+    hashed_pwd = get_password_hash(req.password)
+    new_user = database.User(email=req.email, hashed_password=hashed_pwd)
+    
+    try:
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database registration failure: {str(e)}")
+        
+    token = create_access_token(data={"sub": req.email})
+    return models.AuthResponse(status="success", message="User registered successfully.", token=token)
+
+@app.post("/api/auth/login", response_model=models.AuthResponse)
+def login(req: models.UserLogin, db: Session = Depends(database.get_db)):
+    user = db.query(database.User).filter(database.User.email == req.email).first()
+    if not user or not verify_password(req.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        
+    token = create_access_token(data={"sub": req.email})
+    return models.AuthResponse(status="success", message="Login successful.", token=token)
+
+@app.get("/api/auth/verify")
+def verify_token(token: Optional[str] = None, db: Session = Depends(database.get_db)):
+    if not token:
+        raise HTTPException(status_code=400, detail="Token parameter is required.")
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid token session.")
+        
+        user = db.query(database.User).filter(database.User.email == email).first()
+        if user is None:
+            raise HTTPException(status_code=401, detail="User session not found.")
+            
+        return {"status": "success", "message": "Token is valid.", "email": email}
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token session.")
 
 def parse_intent_with_llm(user_input: str) -> models.LLMIntent:
     """

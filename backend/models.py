@@ -1,5 +1,18 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import Literal, Optional
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class AuthResponse(BaseModel):
+    status: str
+    message: str
+    token: Optional[str] = None
 
 class ExecuteRequest(BaseModel):
     user_input: str = Field(..., description="The natural language command from the user", min_length=1, max_length=500)
@@ -12,3 +25,5 @@ class ExecuteResponse(BaseModel):
 class LLMIntent(BaseModel):
     intent: Literal["open_app", "screenshot", "system_query"]
     target_param: Optional[str] = Field(default=None, description="The targeted application, specific media action, or null")
+
+

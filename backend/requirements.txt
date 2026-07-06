@@ -5,3 +5,6 @@ pymysql
 pydantic
 python-dotenv
 pyautogui
+passlib[bcrypt]
+python-jose[cryptography]
+email-validator
