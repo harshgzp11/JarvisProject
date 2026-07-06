@@ -56,3 +56,5 @@ def adjust_media_controls(action: str) -> dict:
             return {"status": "error", "message": "Unknown media action."}
     except Exception as e:
         return {"status": "error", "message": f"Failed to adjust media controls: {str(e)}"}
+
+        
