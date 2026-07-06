@@ -1,6 +1,6 @@
 import os
 import urllib.parse  # Safely encodes special characters like '@'
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from dotenv import load_dotenv
@@ -69,6 +69,16 @@ class AppMapping(Base):
 # ==========================================
 
 def init_db():
+    try:
+        # Connect without DB name to run CREATE DATABASE DDL if necessary
+        temp_url = f"mysql+pymysql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}"
+        temp_engine = create_engine(temp_url, isolation_level="AUTOCOMMIT")
+        with temp_engine.connect() as conn:
+            conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {DB_NAME}"))
+        temp_engine.dispose()
+    except Exception as e:
+        print(f"Warning: Auto-creation of database '{DB_NAME}' failed: {e}")
+
     try:
         # Automatically generates the database tables on engine connection handshake
         Base.metadata.create_all(bind=engine)
