@@ -5,6 +5,8 @@ import ollama
 import json
 from pydantic import ValidationError
 from passlib.context import CryptContext
+import bcrypt
+import passlib.handlers.bcrypt
 from jose import jwt
 from datetime import datetime, timedelta
 import os
