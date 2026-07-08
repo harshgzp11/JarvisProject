@@ -5,14 +5,18 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Search and load environment variables from CWD, backend folder, or project root
-load_dotenv()
+# 1. Load project root env first (general/fallback settings)
+parent_env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+if os.path.exists(parent_env):
+    load_dotenv(parent_env)
+
+# 2. Load backend folder env next (more specific, overrides root settings)
 local_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 if os.path.exists(local_env):
     load_dotenv(local_env, override=True)
-parent_env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-if os.path.exists(parent_env):
-    load_dotenv(parent_env, override=True)
+
+# 3. Load default env from CWD (overrides all)
+load_dotenv(override=True)
 
 # 1. Fetch values from your .env file
 DB_USER = os.getenv("DB_USER", "root")

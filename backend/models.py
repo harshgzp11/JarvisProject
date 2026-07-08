@@ -21,4 +21,20 @@ class LLMIntent(BaseModel):
     intent: Literal["open_app", "screenshot", "system_query"]
     target_param: Optional[str] = Field(default=None, description="The targeted application, specific media action, or null")
 
+class ChatRequest(BaseModel):
+    message: str = Field(..., description="The user message", min_length=1, max_length=1000)
+
+class Step(BaseModel):
+    type: Literal["LAUNCH", "WAIT", "TYPE", "SHORTCUT", "PASTE"]
+    payload: str
+
+class ChatResponse(BaseModel):
+    response: str = Field(..., description="The text response from the assistant")
+    intent: str = Field(..., description="The detected intent (SYSTEM_COMMAND or GENERAL_QUERY)")
+    action: str = Field(..., description="The specific action to execute, or none")
+    execution_type: Optional[str] = Field(default=None, description="SHELL_COMMAND | PYTHON_SCRIPT | BROWSER_URL | None")
+    payload: Optional[str] = Field(default=None, description="The raw shell command, Python snippet, or URL to execute")
+    steps: Optional[list[Step]] = Field(default=None, description="Ordered list of GUI execution steps")
+
+
 

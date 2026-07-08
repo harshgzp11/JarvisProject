@@ -19,10 +19,13 @@ def launch_application(system_path: str) -> dict:
     except Exception as e:
         return {"status": "error", "message": f"Failed to launch application: {str(e)}"}
 
-def take_screenshot() -> dict:
-    """Takes a full-screen screenshot and saves it to a local 'screenshots' directory."""
+def take_screenshot(custom_dir: str = None) -> dict:
+    """Takes a full-screen screenshot and saves it to a specified or local 'screenshots' directory."""
     try:
-        screenshots_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
+        if custom_dir:
+            screenshots_dir = custom_dir
+        else:
+            screenshots_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshots")
         os.makedirs(screenshots_dir, exist_ok=True)
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
