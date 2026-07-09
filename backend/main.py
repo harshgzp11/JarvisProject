@@ -17,6 +17,10 @@ import re
 import subprocess
 import webbrowser
 import tempfile
+import time
+import pyautogui
+import pyperclip
+import pygetwindow as gw
 from PIL import Image, ImageDraw
 try:
     import pystray
@@ -613,53 +617,76 @@ def execute_system_action(steps: list) -> dict:
     Sequential GUI Orchestration Engine.
     Executes an array of steps (LAUNCH, WAIT, TYPE, SHORTCUT, PASTE) chronologically.
     """
-    import time
-    import pyautogui
-    import pyperclip
-
     if not steps:
         return {"status": "none", "message": "No automation steps to execute."}
 
     executed_steps = []
     try:
         for idx, step in enumerate(steps):
-            step_type = step.get("type", "").upper()
+            step_type = str(step.get("type", "")).upper()
             payload = step.get("payload", "")
 
             print(f"[GUI ENGINE] Step {idx+1}/{len(steps)} | Type: {step_type} | Payload: {payload}")
 
             if step_type == "LAUNCH":
-                # Execute the system command using subprocess.Popen
                 subprocess.Popen(payload, shell=True)
                 executed_steps.append(f"LAUNCH({payload})")
 
+                try:
+                    normalized_payload = str(payload).lower()
+                    title_hint = None
+                    if "notepad" in normalized_payload:
+                        title_hint = "Notepad"
+                    elif "calc" in normalized_payload or "calculator" in normalized_payload:
+                        title_hint = "Calculator"
+                    elif "mspaint" in normalized_payload or "paint" in normalized_payload:
+                        title_hint = "Paint"
+                    elif "wordpad" in normalized_payload:
+                        title_hint = "WordPad"
+                    elif "code" in normalized_payload or "vscode" in normalized_payload:
+                        title_hint = "Visual Studio Code"
+                    elif "chrome" in normalized_payload:
+                        title_hint = "Google Chrome"
+                    elif "edge" in normalized_payload:
+                        title_hint = "Microsoft Edge"
+
+                    target = title_hint or os.path.splitext(str(payload))[0]
+                    for retry in range(3):
+                        windows = gw.getWindowsWithTitle(target) if target else []
+                        if windows:
+                            try:
+                                windows[0].activate()
+                                windows[0].maximize()
+                                break
+                            except Exception:
+                                pass
+                        time.sleep(0.3)
+                except Exception as activation_error:
+                    print(f"[GUI ENGINE] Window activation failed after launch: {activation_error}")
+
             elif step_type == "WAIT":
-                # Pause execution briefly using time.sleep
                 try:
                     duration = float(payload)
-                except ValueError:
+                except (TypeError, ValueError):
                     duration = 1.0
                 time.sleep(duration)
                 executed_steps.append(f"WAIT({duration}s)")
 
             elif step_type == "TYPE":
-                # Use pyautogui.write actively to type text character-by-character
-                pyautogui.write(payload, interval=0.01)
-                executed_steps.append(f"TYPE({len(payload)} chars)")
+                pyautogui.write(str(payload), interval=0.01)
+                executed_steps.append(f"TYPE({len(str(payload))} chars)")
 
             elif step_type == "SHORTCUT":
-                # Parse keys and trigger shortcut hotkey
-                keys = [k.strip().lower() for k in payload.split("+") if k.strip()]
+                keys = [k.strip().lower() for k in str(payload).split("+") if k.strip()]
                 if keys:
                     pyautogui.hotkey(*keys)
                 executed_steps.append(f"SHORTCUT({payload})")
 
             elif step_type == "PASTE":
-                # Clipboard fast pasting for large snippets
-                pyperclip.copy(payload)
-                time.sleep(0.1) # brief pause to ensure clipboard update propagates
+                pyperclip.copy(str(payload))
+                time.sleep(0.1)
                 pyautogui.hotkey("ctrl", "v")
-                executed_steps.append(f"PASTE({len(payload)} chars)")
+                executed_steps.append(f"PASTE({len(str(payload))} chars)")
 
             else:
                 print(f"[GUI ENGINE] Unknown step type: {step_type}")
@@ -695,33 +722,28 @@ def assistant_chat(
     url = "http://localhost:11434/api/chat"
 
     system_prompt = (
-        "You are a native desktop automation agent. Your job is to output precise sequences of keyboard commands, text inputs, and shortcuts to complete complex desktop tasks.\n"
-        "Analyze the user's request and output ONLY a valid JSON object with NO markdown fences, NO explanation text outside the JSON.\n\n"
+        "You are a native desktop automation agent. Accept any natural language request and translate it into a strict JSON plan of executable desktop steps.\n"
+        "Return ONLY a valid JSON object with NO markdown fences, NO explanation text outside the JSON.\n\n"
         "Your JSON response must follow this exact schema:\n"
         "{\n"
-        "  \"response\": \"A brief confirmation of the task.\",\n"
-        "  \"intent\": \"SYSTEM_COMMAND\" | \"GENERAL_QUERY\",\n"
-        "  \"action\": \"none\",\n"
+        "  \"response\": \"A brief, clean confirmation string for the user.\",\n"
         "  \"steps\": [\n"
-        "    { \"type\": \"LAUNCH\" | \"WAIT\" | \"TYPE\" | \"SHORTCUT\" | \"PASTE\", \"payload\": \"string\" }\n"
+        "    { \"type\": \"LAUNCH\" | \"WAIT\" | \"PASTE\" | \"SHORTCUT\", \"payload\": \"string\" }\n"
         "  ]\n"
         "}\n\n"
         "Step types available:\n"
-        "- LAUNCH: Start a GUI app or command using subprocess shell execution. E.g. 'start notepad', 'calc', 'code .'. Use 'start' prefix to launch GUI apps detached.\n"
-        "- WAIT: Pause execution for N seconds (e.g. 1.5) to allow applications to load and focus before typing.\n"
-        "- TYPE: Actively type out text character-by-character into the active/focused window. Best for short inputs.\n"
-        "- SHORTCUT: Perform a keyboard shortcut (e.g., 'ctrl+s', 'ctrl+n', 'alt+tab', 'enter'). Parse via split on '+'.\n"
-        "- PASTE: Copy the text/payload to clipboard and paste it instantly using ctrl+v. Preferred for large blocks of text, code files, or scripts to prevent typing lag.\n\n"
+        "- LAUNCH: Start a GUI app or command with subprocess shell execution. Example payload: 'notepad.exe' or 'calc.exe'.\n"
+        "- WAIT: Pause execution for N seconds (for example '1.0') to allow an app to focus before the next step.\n"
+        "- PASTE: Copy the supplied text or code block to the clipboard and inject it with ctrl+v.\n"
+        "- SHORTCUT: Trigger a keyboard shortcut such as 'ctrl+s' or 'alt+tab' by splitting on '+'.\n\n"
         "Examples:\n"
-        "1. Open notepad, write a quick message, and save it:\n"
+        "1. Open Notepad, write a message, and save it:\n"
         "{\n"
-        "  \"response\": \"Launching Notepad and writing message.\",\n"
-        "  \"intent\": \"SYSTEM_COMMAND\",\n"
-        "  \"action\": \"none\",\n"
+        "  \"response\": \"Launching Notepad and writing the requested message.\",\n"
         "  \"steps\": [\n"
-        "    { \"type\": \"LAUNCH\", \"payload\": \"start notepad\" },\n"
-        "    { \"type\": \"WAIT\", \"payload\": \"1.5\" },\n"
-        "    { \"type\": \"TYPE\", \"payload\": \"Hello from Jarvis!\" },\n"
+        "    { \"type\": \"LAUNCH\", \"payload\": \"notepad.exe\" },\n"
+        "    { \"type\": \"WAIT\", \"payload\": \"1.0\" },\n"
+        "    { \"type\": \"PASTE\", \"payload\": \"Hello from Jarvis!\" },\n"
         "    { \"type\": \"SHORTCUT\", \"payload\": \"ctrl+s\" }\n"
         "  ]\n"
         "}\n"

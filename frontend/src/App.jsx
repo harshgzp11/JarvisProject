@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 
 const parseJwt = (token) => {
   try {
@@ -34,6 +34,8 @@ function App() {
   const [dbLogs, setDbLogs] = useState([]);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [files, setFiles] = useState([]);
+  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
+  const overlayInputRef = useRef(null);
 
   const fetchWorkspaceFiles = async () => {
     const savedToken = localStorage.getItem('jarvis_token');
@@ -72,6 +74,26 @@ function App() {
     const interval = setInterval(fetchVoiceStatus, 2000);
     return () => clearInterval(interval);
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (event) => {
+      if (event.ctrlKey && event.code === 'Space') {
+        event.preventDefault();
+        setIsOverlayOpen((prev) => !prev);
+      }
+      if (event.key === 'Escape' && isOverlayOpen) {
+        setIsOverlayOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [isOverlayOpen]);
+
+  useEffect(() => {
+    if (isOverlayOpen) {
+      overlayInputRef.current?.focus();
+    }
+  }, [isOverlayOpen]);
 
   // Poll database workspace files listing
   useEffect(() => {
@@ -366,6 +388,7 @@ function App() {
 
     const userMessage = { text: input, sender: 'user' };
     setMessages((prev) => [...prev, userMessage]);
+    setIsOverlayOpen(false);
     setInput('');
     addLog({ type: 'info', message: `dispatch_command: "${userMessage.text}"` });
 
@@ -1217,6 +1240,51 @@ function App() {
         return null;
     }
   };
+
+  if (isOverlayOpen && isAuthenticated) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/30 backdrop-blur-sm">
+        <div className="w-[600px] bg-zinc-900/95 backdrop-blur-md border border-zinc-800 rounded-xl shadow-2xl p-4 z-50">
+          <div className="flex items-center justify-between gap-4 mb-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.32em] text-zinc-400 font-semibold">Jarvis Command Overlay</p>
+              <h1 className="text-xl font-bold text-white">Speak or type your desktop task</h1>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[11px] text-zinc-400 uppercase tracking-[0.24em] font-semibold">Listening</span>
+            </div>
+          </div>
+
+          <div className="mt-2">
+            <textarea
+              ref={overlayInputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Type a command or say 'Open Notepad'..."
+              className="w-full min-h-[110px] resize-none rounded-3xl border border-zinc-800 bg-zinc-950/95 px-4 py-4 text-sm text-zinc-100 placeholder-zinc-500 focus:border-zinc-600 focus:outline-none focus:ring-0 shadow-inner"
+            />
+          </div>
+
+          <div className="mt-4 flex items-center justify-between">
+            <span className="text-[11px] text-zinc-500">Ctrl + Space to toggle overlay • Enter to submit • Esc to cancel.</span>
+            <button
+              onClick={handleSend}
+              className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400"
+            >
+              Send Command
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-zinc-950 text-zinc-100 antialiased font-sans">
