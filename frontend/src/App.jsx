@@ -28,6 +28,7 @@ function App() {
 
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
+  const [command, setCommand] = useState('');
   const [logs, setLogs] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [metrics, setMetrics] = useState({ cpu: 0, ram: 0 });
@@ -383,13 +384,15 @@ function App() {
     addLog({ type: 'info', message: 'Session terminated. De-authorized.' });
   };
 
-  const handleSend = async () => {
-    if (!input.trim()) return;
+  const handleSend = async (messageText) => {
+    const outgoingText = typeof messageText === 'string' ? messageText : input;
+    if (!outgoingText.trim()) return;
 
-    const userMessage = { text: input, sender: 'user' };
+    const userMessage = { text: outgoingText, sender: 'user' };
     setMessages((prev) => [...prev, userMessage]);
     setIsOverlayOpen(false);
     setInput('');
+    setCommand('');
     addLog({ type: 'info', message: `dispatch_command: "${userMessage.text}"` });
 
     try {
@@ -1243,43 +1246,43 @@ function App() {
 
   if (isOverlayOpen && isAuthenticated) {
     return (
-      <div className="fixed inset-0 z-50 flex items-start justify-center pt-24 bg-black/30 backdrop-blur-sm">
-        <div className="w-[600px] bg-zinc-900/95 backdrop-blur-md border border-zinc-800 rounded-xl shadow-2xl p-4 z-50">
-          <div className="flex items-center justify-between gap-4 mb-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.32em] text-zinc-400 font-semibold">Jarvis Command Overlay</p>
-              <h1 className="text-xl font-bold text-white">Speak or type your desktop task</h1>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[11px] text-zinc-400 uppercase tracking-[0.24em] font-semibold">Listening</span>
+      <div className="fixed inset-0 z-50 bg-zinc-950 text-zinc-100">
+        <div className="absolute inset-0 bg-zinc-950/95 backdrop-blur-sm" />
+        <div className="relative mx-auto flex min-h-screen flex-col justify-end px-4 pb-8">
+          <div className="mx-auto w-full max-w-5xl px-6 py-4 rounded-3xl border border-zinc-800/60 bg-zinc-900/70 shadow-2xl shadow-black/40 backdrop-blur-md">
+            <div className="flex flex-col gap-2 text-center">
+              <p className="text-[10px] uppercase tracking-[0.32em] text-zinc-500 font-semibold">Jarvis Command Canvas</p>
+              <h1 className="text-xl font-bold text-white">Minimal desktop dispatch interface</h1>
+              <p className="text-sm text-zinc-400">Use the pill bar below to issue a command or quick system task.</p>
             </div>
           </div>
 
-          <div className="mt-2">
-            <textarea
-              ref={overlayInputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder="Type a command or say 'Open Notepad'..."
-              className="w-full min-h-[110px] resize-none rounded-3xl border border-zinc-800 bg-zinc-950/95 px-4 py-4 text-sm text-zinc-100 placeholder-zinc-500 focus:border-zinc-600 focus:outline-none focus:ring-0 shadow-inner"
-            />
-          </div>
+          <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+            <div className="w-full max-w-3xl rounded-full border border-zinc-800/80 bg-zinc-900/95 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur-md flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <input
+                  ref={overlayInputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSend();
+                    }
+                  }}
+                  placeholder="Type a command like 'Open Notepad' or 'Create shortcut'..."
+                  className="w-full bg-transparent border-none text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none"
+                />
+                <div className="mt-2 text-[10px] text-zinc-500">Ctrl + Space to toggle • Enter to submit • Esc to close</div>
+              </div>
 
-          <div className="mt-4 flex items-center justify-between">
-            <span className="text-[11px] text-zinc-500">Ctrl + Space to toggle overlay • Enter to submit • Esc to cancel.</span>
-            <button
-              onClick={handleSend}
-              className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400"
-            >
-              Send Command
-            </button>
+              <button
+                onClick={() => handleSend()}
+                className="rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold uppercase tracking-[0.12em] text-zinc-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400"
+              >
+                Send
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1287,102 +1290,23 @@ function App() {
   }
 
   return (
-    <div className="flex min-h-screen bg-zinc-950 text-zinc-100 antialiased font-sans">
-      {/* Sleek left fixed sidebar */}
-      <aside className="w-64 bg-zinc-900/50 border-r border-zinc-800/60 flex flex-col justify-between shrink-0 fixed h-screen z-10">
-        <div>
-          {/* Brand header */}
-          <div className="h-16 px-6 border-b border-zinc-800/60 flex items-center gap-2.5 shrink-0">
-            <div className="w-7 h-7 rounded-lg bg-white text-zinc-950 flex items-center justify-center font-bold text-xs shadow-sm">
-              ▲
-            </div>
-            <div>
-              <span className="font-bold text-xs tracking-wider text-zinc-100 uppercase font-sans">Jarvis Core</span>
-              <span className="block text-[9px] text-emerald-400 font-bold uppercase tracking-widest mt-0.5 font-sans">Live developer</span>
-            </div>
-          </div>
+    <div className="min-h-screen w-screen bg-zinc-950 text-zinc-100 font-sans antialiased">
+      <div className="mx-auto flex min-h-screen flex-col items-center justify-center px-6 text-center">
+        <p className="text-xs uppercase tracking-[0.32em] text-zinc-500 mb-4">Jarvis Command Canvas</p>
+        <h1 className="text-5xl font-extrabold text-white mb-3">Minimal desktop launcher</h1>
+        <p className="max-w-2xl text-sm leading-7 text-zinc-400">
+          This is your full-screen dark canvas. Press <span className="font-semibold text-white">Ctrl + Space</span> to open the bottom command pill and dispatch system workflows.
+        </p>
+      </div>
 
-          {/* Navigation link group */}
-          <nav className="p-4 space-y-1">
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs transition-all duration-150 font-semibold cursor-pointer ${
-                  activeTab === item.id
-                    ? 'bg-zinc-800/60 text-white'
-                    : 'text-zinc-400 hover:bg-zinc-800/30 hover:text-zinc-200'
-                }`}
-              >
-                {item.icon}
-                <span className="font-sans">{item.label}</span>
-              </button>
-            ))}
-          </nav>
-        </div>
-
-        {/* Profile Bar in sidebar bottom */}
-        <div className="p-4 border-t border-zinc-800/60 shrink-0">
-          <div className="flex items-center gap-3 p-2 rounded-xl hover:bg-zinc-800/30 transition-colors duration-150">
-            {user.picture ? (
-              <img
-                src={user.picture}
-                alt={user.name || 'User'}
-                className="w-9 h-9 rounded-full object-cover border border-zinc-800 shadow-sm"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <div className="w-9 h-9 rounded-full bg-zinc-800 text-zinc-200 flex items-center justify-center font-bold text-sm border border-zinc-700">
-                {user.name ? user.name.charAt(0).toUpperCase() : 'U'}
-              </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-bold text-zinc-100 truncate font-sans">{user.name || 'Operator'}</p>
-              <p className="text-[10px] text-zinc-500 truncate font-semibold font-sans">{user.email || 'operator@jarvis.local'}</p>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      {/* Main content grid view */}
-      <main className="flex-1 ml-64 min-h-screen flex flex-col">
-        {/* Workspace Top Header */}
-        <header className="h-16 bg-transparent border-b border-zinc-800/50 px-8 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xs font-bold text-zinc-100 uppercase tracking-wider font-sans">{activeTab.replace('-', ' ')}</h2>
-            <span className="h-4 w-px bg-zinc-800"></span>
-            <div className="flex items-center gap-1.5">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
-              </span>
-              <span className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider font-sans">Console Connected</span>
-            </div>
-            {isVoiceActive && (
-              <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-950/40 border border-red-900/30 text-red-400 animate-pulse text-[9px] font-mono font-bold tracking-widest uppercase ml-1 select-none">
-                <svg className="w-2.5 h-2.5 shrink-0" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zM17.3 11c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
-                </svg>
-                <span>Voice Active</span>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-4">
-            <button
-              onClick={handleLogout}
-              className="text-[10px] text-zinc-400 hover:text-rose-450 hover:bg-rose-950/20 px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-rose-900/30 font-bold uppercase tracking-wider transition-all duration-150 cursor-pointer font-sans"
-            >
-              Sign Out
-            </button>
-          </div>
-        </header>
-
-        {/* Tab contents window */}
-        <div className="flex-1 p-8 overflow-y-auto bg-zinc-950">
-          {renderTabContent()}
-        </div>
-      </main>
+      <div className="fixed inset-x-0 bottom-6 z-20 flex justify-center px-4">
+        <button
+          onClick={() => setIsOverlayOpen(true)}
+          className="rounded-full border border-zinc-800/80 bg-zinc-900/95 px-6 py-3 text-sm font-semibold text-white shadow-2xl shadow-black/40 transition hover:bg-zinc-800"
+        >
+          Open Command Pill
+        </button>
+      </div>
     </div>
   );
 }

@@ -10,6 +10,7 @@ from google.auth.transport import requests
 from jose import jwt
 from datetime import datetime, timedelta
 import os
+import shutil
 from typing import Optional
 import requests as http_requests
 import threading
@@ -22,6 +23,14 @@ import pyautogui
 import pyperclip
 import pygetwindow as gw
 from PIL import Image, ImageDraw
+try:
+    import winshell
+except ImportError:
+    winshell = None
+try:
+    from win32com.client import Dispatch
+except ImportError:
+    Dispatch = None
 try:
     import pystray
     from pystray import MenuItem as item
@@ -681,6 +690,40 @@ def execute_system_action(steps: list) -> dict:
                 if keys:
                     pyautogui.hotkey(*keys)
                 executed_steps.append(f"SHORTCUT({payload})")
+
+            elif step_type == "MAKE_SHORTCUT":
+                if not isinstance(payload, dict):
+                    print(f"[GUI ENGINE] MAKE_SHORTCUT invalid payload: {payload}")
+                else:
+                    shortcut_name = str(payload.get("name", "Jarvis Shortcut")).strip()
+                    target_path = str(payload.get("target_path", "")).strip()
+                    if shortcut_name and target_path:
+                        if not winshell or not Dispatch:
+                            raise RuntimeError("Windows shortcut creation dependencies are not available.")
+                        desktop_path = winshell.desktop()
+                        shortcut_path = os.path.join(desktop_path, f"{shortcut_name}.lnk")
+                        shell = Dispatch('WScript.Shell')
+                        shortcut = shell.CreateShortCut(shortcut_path)
+                        shortcut.Targetpath = target_path
+                        shortcut.WorkingDirectory = os.path.dirname(target_path)
+                        shortcut.save()
+                        executed_steps.append(f"MAKE_SHORTCUT({shortcut_path})")
+                    else:
+                        print("[GUI ENGINE] MAKE_SHORTCUT payload missing required 'name' or 'target_path'.")
+
+            elif step_type == "MOVE_FILE":
+                if not isinstance(payload, dict):
+                    print(f"[GUI ENGINE] MOVE_FILE invalid payload: {payload}")
+                else:
+                    source_path = str(payload.get("source", "")).strip()
+                    destination_path = str(payload.get("destination", "")).strip()
+                    if source_path and destination_path:
+                        source_path = os.path.abspath(source_path)
+                        destination_path = os.path.abspath(destination_path)
+                        shutil.move(source_path, destination_path)
+                        executed_steps.append(f"MOVE_FILE({source_path} -> {destination_path})")
+                    else:
+                        print("[GUI ENGINE] MOVE_FILE payload missing required 'source' or 'destination'.")
 
             elif step_type == "PASTE":
                 pyperclip.copy(str(payload))
