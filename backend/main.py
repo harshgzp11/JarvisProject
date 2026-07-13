@@ -22,7 +22,9 @@ import time
 import pyautogui
 import pyperclip
 import pygetwindow as gw
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageGrab
+import cv2
+import numpy as np
 try:
     import winshell
 except ImportError:
@@ -621,6 +623,77 @@ def execute_command(
         intent=intent
     )
 
+def capture_desktop_state() -> dict:
+    """
+    Capture the current primary desktop frame for local vision-style agent reasoning.
+    Returns a lightweight state payload with image dimensions and an RGB array.
+    """
+    try:
+        screenshot = ImageGrab.grab(all_screens=False)
+        if screenshot is None:
+            return {"width": 0, "height": 0, "rgb_array": None, "error": "No screenshot captured"}
+
+        rgb_image = screenshot.convert("RGB")
+        rgb_array = np.array(rgb_image)
+        if rgb_array.ndim == 2:
+            rgb_array = np.repeat(rgb_array[:, :, None], 3, axis=2)
+
+        height, width = rgb_array.shape[:2]
+        return {
+            "timestamp": time.time(),
+            "width": width,
+            "height": height,
+            "rgb_array": rgb_array,
+            "mode": "primary_monitor"
+        }
+    except Exception as e:
+        print(f"[DESKTOP EYES] Failed to capture desktop state: {e}")
+        return {"width": 0, "height": 0, "rgb_array": None, "error": str(e)}
+
+
+def execute_agent_action(action: dict) -> dict:
+    """
+    Native desktop action executor for the autonomous Computer Use Agent loop.
+    Supports SHELL_EXECUTE, MOUSE_CLICK, TYPE_TEXT, and KEYBOARD_SHORTCUT.
+    """
+    if not isinstance(action, dict):
+        return {"status": "error", "message": "Action payload must be an object."}
+
+    action_type = str(action.get("action", "")).upper()
+    try:
+        if action_type == "SHELL_EXECUTE":
+            command = str(action.get("command", "")).strip()
+            if not command:
+                return {"status": "error", "message": "SHELL_EXECUTE requires a command."}
+            subprocess.Popen(command, shell=True)
+            return {"status": "success", "message": f"Executed shell command: {command}"}
+
+        if action_type == "MOUSE_CLICK":
+            x = int(action.get("x", 0))
+            y = int(action.get("y", 0))
+            pyautogui.click(x, y)
+            return {"status": "success", "message": f"Clicked screen coordinate ({x}, {y})"}
+
+        if action_type == "TYPE_TEXT":
+            text = str(action.get("text", ""))
+            pyautogui.write(text, interval=0.01)
+            return {"status": "success", "message": f"Typed {len(text)} characters"}
+
+        if action_type == "KEYBOARD_SHORTCUT":
+            keys = action.get("keys", [])
+            if not isinstance(keys, list) or not keys:
+                return {"status": "error", "message": "KEYBOARD_SHORTCUT requires a non-empty keys array."}
+            normalized_keys = [str(k).strip().lower() for k in keys if str(k).strip()]
+            if normalized_keys:
+                pyautogui.hotkey(*normalized_keys)
+            return {"status": "success", "message": f"Executed shortcut: {'+'.join(normalized_keys)}"}
+
+        return {"status": "error", "message": f"Unsupported action type: {action_type}"}
+    except Exception as e:
+        print(f"[AGENT ACTION] Failed to execute action {action_type}: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 def execute_system_action(steps: list) -> dict:
     """
     Sequential GUI Orchestration Engine.
@@ -747,7 +820,7 @@ def assistant_chat(
     current_user: database.User = Depends(get_current_user)
 ):
     user_msg = req.message
-    
+
     # 1. Fetch conversational history from the DB (last 5 message exchanges)
     db_history = []
     try:
@@ -761,92 +834,148 @@ def assistant_chat(
     except Exception as e:
         print(f"Failed to query database context history: {e}")
 
-    # 2. Determine intent & execution plan using local Ollama model (open-ended architecture)
+    # 2. Run an autonomous perception-action loop with the local Ollama model.
     url = "http://localhost:11434/api/chat"
 
-    system_prompt = (
-        "You are a native desktop automation agent. Accept any natural language request and translate it into a strict JSON plan of executable desktop steps.\n"
-        "Return ONLY a valid JSON object with NO markdown fences, NO explanation text outside the JSON.\n\n"
-        "Your JSON response must follow this exact schema:\n"
-        "{\n"
-        "  \"response\": \"A brief, clean confirmation string for the user.\",\n"
-        "  \"steps\": [\n"
-        "    { \"type\": \"LAUNCH\" | \"WAIT\" | \"PASTE\" | \"SHORTCUT\", \"payload\": \"string\" }\n"
-        "  ]\n"
-        "}\n\n"
-        "Step types available:\n"
-        "- LAUNCH: Start a GUI app or command with subprocess shell execution. Example payload: 'notepad.exe' or 'calc.exe'.\n"
-        "- WAIT: Pause execution for N seconds (for example '1.0') to allow an app to focus before the next step.\n"
-        "- PASTE: Copy the supplied text or code block to the clipboard and inject it with ctrl+v.\n"
-        "- SHORTCUT: Trigger a keyboard shortcut such as 'ctrl+s' or 'alt+tab' by splitting on '+'.\n\n"
-        "Examples:\n"
-        "1. Open Notepad, write a message, and save it:\n"
-        "{\n"
-        "  \"response\": \"Launching Notepad and writing the requested message.\",\n"
-        "  \"steps\": [\n"
-        "    { \"type\": \"LAUNCH\", \"payload\": \"notepad.exe\" },\n"
-        "    { \"type\": \"WAIT\", \"payload\": \"1.0\" },\n"
-        "    { \"type\": \"PASTE\", \"payload\": \"Hello from Jarvis!\" },\n"
-        "    { \"type\": \"SHORTCUT\", \"payload\": \"ctrl+s\" }\n"
-        "  ]\n"
-        "}\n"
-    )
-
-    ollama_messages = [{"role": "system", "content": system_prompt}]
-    ollama_messages.extend(db_history)
-    ollama_messages.append({"role": "user", "content": user_msg})
-
-    ollama_payload = {
-        "model": "llama3.2:latest",
-        "messages": ollama_messages,
-        "stream": False,
-        "format": "json"
-    }
+    def build_system_prompt() -> str:
+        return (
+            "You are Jarvis, an autonomous computer-use agent for this desktop environment. "
+            "You are not limited to a fixed launcher; you may plan and execute a sequence of native tool actions.\n"
+            "Return ONLY a valid JSON object with NO markdown fences, NO explanation text outside the JSON.\n\n"
+            "Required JSON schema:\n"
+            "{\n"
+            "  \"response\": \"A concise confirmation or progress update\",\n"
+            "  \"objective\": \"The current task goal\",\n"
+            "  \"status\": \"in_progress\" | \"completed\" | \"failed\",\n"
+            "  \"final_condition\": \"What must be true for the task to be considered complete\",\n"
+            "  \"next_action\": {\n"
+            "    \"action\": \"SHELL_EXECUTE\" | \"MOUSE_CLICK\" | \"TYPE_TEXT\" | \"KEYBOARD_SHORTCUT\",\n"
+            "    \"command\": \"raw terminal command\",\n"
+            "    \"x\": 0,\n"
+            "    \"y\": 0,\n"
+            "    \"text\": \"payload to input\",\n"
+            "    \"keys\": [\"ctrl\", \"s\"]\n"
+            "  },\n"
+            "  \"steps\": [\n"
+            "    { \"type\": \"LAUNCH\" | \"WAIT\" | \"PASTE\" | \"SHORTCUT\", \"payload\": \"string\" }\n"
+            "  ]\n"
+            "}\n\n"
+            "Tool-calling blueprint:\n"
+            "- SHELL_EXECUTE: execute a raw terminal command for file operations, directory mapping, or launching apps.\n"
+            "- MOUSE_CLICK: click a visible UI element using pixel coordinates from the current desktop layout.\n"
+            "- TYPE_TEXT: type arbitrary text into the currently focused input field.\n"
+            "- KEYBOARD_SHORTCUT: trigger a system macro such as ctrl+s, ctrl+v, alt+tab.\n\n"
+            "Rules:\n"
+            "- Prefer the smallest valid action that advances the goal.\n"
+            "- If the goal is already satisfied, return status 'completed' and set next_action to null.\n"
+            "- If you cannot directly act yet, use a safe follow-up action such as WAIT or a harmless shell probe.\n"
+            "- Always reason from the current desktop context and the user's stated objective."
+        )
 
     response_text = "Standing by."
     intent = "GENERAL_QUERY"
     action = "none"
     steps = []
-
-    try:
-        ollama_resp = http_requests.post(url, json=ollama_payload, timeout=20.0)
-        if ollama_resp.status_code == 200:
-            data = ollama_resp.json()
-            message_content = data.get("message", {}).get("content", "").strip()
-            # Strip markdown fences if model wraps in ```json ... ```
-            if message_content.startswith("```"):
-                message_content = re.sub(r'^```[^\n]*\n?', '', message_content)
-                message_content = re.sub(r'```$', '', message_content).strip()
-            parsed_data = json.loads(message_content)
-            response_text = parsed_data.get("response", response_text)
-            intent = parsed_data.get("intent", intent)
-            steps = parsed_data.get("steps", [])
-            if not isinstance(steps, list):
-                steps = []
-            action = parsed_data.get("action", "none")
-    except Exception as e:
-        print(f"[JARVIS] Ollama engine unreachable or returned invalid JSON: {e}")
-        response_text = (
-            f"Ollama engine is offline or returned an invalid response. "
-            f"Please ensure Llama 3.2 is running at localhost:11434. (Error: {type(e).__name__})"
-        )
-        intent = "GENERAL_QUERY"
-        steps = []
-        action = "none"
-
-    # 3. Execute via the new sequential steps engine
     status = "pending"
-    if steps:
-        exec_result = execute_system_action(steps)
-        status = exec_result.get("status", "pending")
-        if exec_result.get("status") == "success":
-            response_text = f"{response_text} ✓ ({exec_result.get('message')})"
-        elif exec_result.get("status") == "error":
-            response_text = f"Execution error: {exec_result.get('message')}"
-    else:
+    agent_trace = []
+    max_steps = 6
+
+    for step_index in range(max_steps):
+        desktop_state = capture_desktop_state()
+        desktop_summary = (
+            f"Desktop size: {desktop_state.get('width', 0)}x{desktop_state.get('height', 0)} px; "
+            f"mode={desktop_state.get('mode', 'unknown')}"
+        )
+        loop_context = (
+            f"User objective: {user_msg}\n"
+            f"Desktop context: {desktop_summary}\n"
+            f"Previous actions: {agent_trace if agent_trace else 'none'}"
+        )
+
+        ollama_messages = [{"role": "system", "content": build_system_prompt()}]
+        ollama_messages.extend(db_history)
+        ollama_messages.append({"role": "user", "content": loop_context})
+
+        ollama_payload = {
+            "model": "llama3.2:latest",
+            "messages": ollama_messages,
+            "stream": False,
+            "format": "json"
+        }
+
+        try:
+            ollama_resp = http_requests.post(url, json=ollama_payload, timeout=20.0)
+            if ollama_resp.status_code == 200:
+                data = ollama_resp.json()
+                message_content = data.get("message", {}).get("content", "").strip()
+                if message_content.startswith("```"):
+                    message_content = re.sub(r'^```[^\n]*\n?', '', message_content)
+                    message_content = re.sub(r'```$', '', message_content).strip()
+                parsed_data = json.loads(message_content)
+                response_text = parsed_data.get("response", response_text)
+                intent = parsed_data.get("intent", intent)
+                steps = parsed_data.get("steps", [])
+                if not isinstance(steps, list):
+                    steps = []
+                action = parsed_data.get("action", "none")
+
+                next_action = parsed_data.get("next_action")
+                final_status = str(parsed_data.get("status", "in_progress")).lower()
+
+                if isinstance(next_action, dict) and next_action.get("action"):
+                    action_result = execute_agent_action(next_action)
+                    agent_trace.append({
+                        "step": step_index + 1,
+                        "action": next_action.get("action"),
+                        "result": action_result.get("status"),
+                        "message": action_result.get("message")
+                    })
+                    if action_result.get("status") != "success":
+                        status = "error"
+                        response_text = f"Execution error: {action_result.get('message')}"
+                        break
+
+                    if final_status == "completed":
+                        status = "success"
+                        response_text = f"{response_text} ✓"
+                        break
+                elif steps:
+                    legacy_result = execute_system_action(steps)
+                    agent_trace.append({
+                        "step": step_index + 1,
+                        "action": "LEGACY_SEQUENCE",
+                        "result": legacy_result.get("status"),
+                        "message": legacy_result.get("message")
+                    })
+                    status = legacy_result.get("status", "pending")
+                    response_text = f"{response_text} ✓ ({legacy_result.get('message')})"
+                    break
+                else:
+                    if final_status == "completed":
+                        status = "success"
+                        response_text = f"{response_text} ✓"
+                        break
+                    status = "ok"
+
+                time.sleep(1.0)
+            else:
+                raise RuntimeError("Ollama request failed")
+        except Exception as e:
+            print(f"[JARVIS] Ollama engine unreachable or returned invalid JSON: {e}")
+            response_text = (
+                f"Ollama engine is offline or returned an invalid response. "
+                f"Please ensure Llama 3.2 is running at localhost:11434. (Error: {type(e).__name__})"
+            )
+            intent = "GENERAL_QUERY"
+            steps = []
+            action = "none"
+            status = "error"
+            break
+
+    if status == "pending":
         status = "ok"
 
-    # 4. Log to DB
+    # 3. Log to DB
     try:
         log_entry = database.AssistantLog(
             user_input=user_msg,
