@@ -33,10 +33,12 @@ function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [metrics, setMetrics] = useState({ cpu: 0, ram: 0 });
   const [dbLogs, setDbLogs] = useState([]);
-  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
   const [files, setFiles] = useState([]);
   const [isOverlayOpen, setIsOverlayOpen] = useState(false);
   const overlayInputRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   const fetchWorkspaceFiles = async () => {
     const savedToken = localStorage.getItem('jarvis_token');
@@ -57,24 +59,64 @@ function App() {
     }
   };
 
-  // Poll voice activation listener active status
+  // Initialize the browser speech recognition adapter once
   useEffect(() => {
-    if (!isAuthenticated) return;
-    const fetchVoiceStatus = async () => {
-      try {
-        const response = await fetch('http://localhost:8000/api/system/voice/status');
-        if (response.ok) {
-          const data = await response.json();
-          setIsVoiceActive(data.active);
-        }
-      } catch (err) {
-        console.error("Voice status poll failed:", err);
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSpeechSupported(false);
+      recognitionRef.current = null;
+      return;
+    }
+
+    setSpeechSupported(true);
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      setIsListening(false);
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = event.results?.[0]?.[0]?.transcript?.trim();
+      if (transcript) {
+        setInput(transcript);
       }
     };
-    fetchVoiceStatus();
-    const interval = setInterval(fetchVoiceStatus, 2000);
-    return () => clearInterval(interval);
-  }, [isAuthenticated]);
+
+    recognitionRef.current = recognition;
+    return () => {
+      recognition.stop?.();
+      recognitionRef.current = null;
+    };
+  }, []);
+
+  const toggleVoiceRecognition = () => {
+    const recognition = recognitionRef.current;
+    if (!recognition) return;
+
+    if (isListening) {
+      recognition.stop();
+      return;
+    }
+
+    try {
+      recognition.start();
+    } catch (err) {
+      console.error('Unable to start speech recognition:', err);
+    }
+  };
 
   useEffect(() => {
     const handleGlobalKeyDown = (event) => {
@@ -390,8 +432,6 @@ function App() {
 
     const userMessage = { text: outgoingText, sender: 'user' };
     setMessages((prev) => [...prev, userMessage]);
-    setIsOverlayOpen(false);
-    setInput('');
     setCommand('');
     addLog({ type: 'info', message: `dispatch_command: "${userMessage.text}"` });
 
@@ -427,6 +467,8 @@ function App() {
       };
       
       setMessages((prev) => [...prev, aiMessage]);
+      setInput('');
+      overlayInputRef.current?.focus();
       addLog({ 
         type: data.action !== 'none' ? 'success' : 'info', 
         message: `sys_response: [${data.intent}] - ${data.response}` 
@@ -1246,10 +1288,10 @@ function App() {
 
   if (isOverlayOpen && isAuthenticated) {
     return (
-      <div className="fixed inset-0 z-50 bg-zinc-950 text-zinc-100">
+      <div className="fixed inset-0 z-50 bg-zinc-950 text-zinc-100" onClick={() => setIsOverlayOpen(false)}>
         <div className="absolute inset-0 bg-zinc-950/95 backdrop-blur-sm" />
-        <div className="relative mx-auto flex min-h-screen flex-col justify-end px-4 pb-8">
-          <div className="mx-auto w-full max-w-5xl px-6 py-4 rounded-3xl border border-zinc-800/60 bg-zinc-900/70 shadow-2xl shadow-black/40 backdrop-blur-md">
+        <div className="flex min-h-screen flex-col justify-end px-4 pb-8" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-5xl mx-auto mb-24 px-6 py-4 rounded-3xl border border-zinc-800/60 bg-zinc-900/70 shadow-2xl shadow-black/40 backdrop-blur-md">
             <div className="flex flex-col gap-2 text-center">
               <p className="text-[10px] uppercase tracking-[0.32em] text-zinc-500 font-semibold">Jarvis Command Canvas</p>
               <h1 className="text-xl font-bold text-white">Minimal desktop dispatch interface</h1>
@@ -1257,31 +1299,56 @@ function App() {
             </div>
           </div>
 
-          <div className="fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
-            <div className="w-full max-w-3xl rounded-full border border-zinc-800/80 bg-zinc-900/95 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur-md flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <input
-                  ref={overlayInputRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSend();
-                    }
-                  }}
-                  placeholder="Type a command like 'Open Notepad' or 'Create shortcut'..."
-                  className="w-full bg-transparent border-none text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none"
-                />
-                <div className="mt-2 text-[10px] text-zinc-500">Ctrl + Space to toggle • Enter to submit • Esc to close</div>
+          <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center px-4 pb-6">
+            <div className="w-full max-w-2xl rounded-full border border-zinc-800/80 bg-zinc-900/95 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur-md flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <input
+                    ref={overlayInputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSend();
+                      }
+                    }}
+                    placeholder="Ask Jarvis.."
+                    className="w-full bg-transparent border-none text-lg text-zinc-100 placeholder-zinc-500 focus:outline-none"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={toggleVoiceRecognition}
+                  disabled={!speechSupported}
+                  className={`flex h-12 w-12 items-center justify-center rounded-full transition ${isListening ? 'bg-red-500/20 ring-2 ring-red-500 text-red-300 animate-pulse' : speechSupported ? 'bg-zinc-950/90 text-zinc-200 hover:bg-zinc-900' : 'bg-zinc-700/80 text-zinc-500 cursor-not-allowed'}`}
+                  title={speechSupported ? (isListening ? 'Listening...' : 'Start voice input') : 'Voice recognition not supported'}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                    <path d="M12 1v11" />
+                    <path d="M5 10a7 7 0 0014 0" />
+                    <path d="M19 10v2a7 7 0 01-14 0v-2" />
+                    <path d="M8 18.5a4 4 0 008 0" />
+                  </svg>
+                </button>
+
+                <button
+                  onClick={() => handleSend()}
+                  className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-400"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                    <path d="M5 12h14" />
+                    <path d="M13 6l6 6-6 6" />
+                  </svg>
+                </button>
               </div>
 
-              <button
-                onClick={() => handleSend()}
-                className="rounded-full bg-emerald-500 px-4 py-2 text-sm font-semibold uppercase tracking-[0.12em] text-zinc-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400"
-              >
-                Send
-              </button>
+              <div className="flex flex-wrap justify-between gap-3 text-[10px] text-zinc-500">
+                <span>Ctrl + Space to toggle • Enter to submit • Esc to close</span>
+                {!speechSupported && <span className="text-rose-400">Voice recognition not supported in this browser.</span>}
+                {speechSupported && isListening && <span className="text-emerald-300">Listening... speak now.</span>}
+              </div>
             </div>
           </div>
         </div>
@@ -1290,22 +1357,65 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen w-screen bg-zinc-950 text-zinc-100 font-sans antialiased">
+    <div className="min-h-screen w-screen bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),transparent_25%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.1),transparent_20%),#020617] text-zinc-100 font-sans antialiased">
       <div className="mx-auto flex min-h-screen flex-col items-center justify-center px-6 text-center">
-        <p className="text-xs uppercase tracking-[0.32em] text-zinc-500 mb-4">Jarvis Command Canvas</p>
-        <h1 className="text-5xl font-extrabold text-white mb-3">Minimal desktop launcher</h1>
-        <p className="max-w-2xl text-sm leading-7 text-zinc-400">
-          This is your full-screen dark canvas. Press <span className="font-semibold text-white">Ctrl + Space</span> to open the bottom command pill and dispatch system workflows.
+        <p className="text-xs uppercase tracking-[0.4em] text-zinc-500 mb-4 font-semibold">Jarvis Command Canvas</p>
+        <h1 className="text-5xl sm:text-6xl font-extrabold text-white mb-4">Minimal desktop launcher</h1>
+        <p className="max-w-2xl text-sm leading-8 text-zinc-400">
+          A calm, modern canvas for your Jarvis workflow. The command pill is already available below—type, speak, and send when ready.
         </p>
       </div>
 
-      <div className="fixed inset-x-0 bottom-6 z-20 flex justify-center px-4">
-        <button
-          onClick={() => setIsOverlayOpen(true)}
-          className="rounded-full border border-zinc-800/80 bg-zinc-900/95 px-6 py-3 text-sm font-semibold text-white shadow-2xl shadow-black/40 transition hover:bg-zinc-800"
-        >
-          Open Command Pill
-        </button>
+      <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center px-4 pb-6">
+        <div className="w-full max-w-2xl rounded-full border border-zinc-800/80 bg-zinc-900/95 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur-md flex flex-col gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <input
+                ref={overlayInputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder="Ask Jarvis.."
+                className="w-full bg-transparent border-none text-lg text-zinc-100 placeholder-zinc-500 focus:outline-none"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={toggleVoiceRecognition}
+              disabled={!speechSupported}
+              className={`flex h-12 w-12 items-center justify-center rounded-full transition ${isListening ? 'bg-red-500/20 ring-2 ring-red-500 text-red-300 animate-pulse' : speechSupported ? 'bg-zinc-950/90 text-zinc-200 hover:bg-zinc-900' : 'bg-zinc-700/80 text-zinc-500 cursor-not-allowed'}`}
+              title={speechSupported ? (isListening ? 'Listening...' : 'Start voice input') : 'Voice recognition not supported'}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                <path d="M12 1v11" />
+                <path d="M5 10a7 7 0 0014 0" />
+                <path d="M19 10v2a7 7 0 01-14 0v-2" />
+                <path d="M8 18.5a4 4 0 008 0" />
+              </svg>
+            </button>
+
+            <button
+              onClick={() => handleSend()}
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-400"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                <path d="M5 12h14" />
+                <path d="M13 6l6 6-6 6" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="flex flex-wrap justify-between gap-3 text-[10px] text-zinc-500">
+            {!speechSupported && <span className="text-rose-400">Voice recognition not supported in this browser.</span>}
+            {speechSupported && isListening && <span className="text-emerald-300">Listening... speak now.</span>}
+          </div>
+        </div>
       </div>
     </div>
   );

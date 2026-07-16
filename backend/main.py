@@ -2,7 +2,10 @@ from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-import ollama
+try:
+    import ollama
+except ImportError:
+    ollama = None
 import json
 from pydantic import ValidationError
 from google.oauth2 import id_token
@@ -18,13 +21,46 @@ import re
 import subprocess
 import webbrowser
 import tempfile
+import difflib
 import time
-import pyautogui
-import pyperclip
-import pygetwindow as gw
-from PIL import Image, ImageDraw, ImageGrab
-import cv2
-import numpy as np
+from urllib.parse import quote_plus, urlparse
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
+
+try:
+    import pyautogui
+except ImportError:
+    pyautogui = None
+
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
+
+try:
+    import pygetwindow as gw
+except ImportError:
+    gw = None
+
+try:
+    from PIL import Image, ImageDraw, ImageGrab
+except ImportError:
+    Image = None
+    ImageDraw = None
+    ImageGrab = None
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 try:
     import winshell
 except ImportError:
@@ -58,11 +94,90 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(ROOT_DIR, ".env"))
+load_dotenv(os.path.join(BACKEND_DIR, ".env"))
+load_dotenv()
+
 # Security Configurations
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", os.getenv("JWT_SECRET", "super-secret-key-change-in-production"))
+SECRET_KEY = os.getenv("JWT_SECRET", os.getenv("JWT_SECRET_KEY", ""))
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 120
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+OLLAMA_ENDPOINT = os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434/api/chat")
+WORKSPACE_DIR = os.getenv("WORKSPACE_PATH", os.path.join(os.path.expanduser("~"), "JarvisWorkspace"))
+
+
+def verify_required_config() -> list[str]:
+    required_keys = ["DB_HOST", "DB_PORT", "JWT_SECRET", "BACKEND_URL", "OLLAMA_ENDPOINT", "WORKSPACE_PATH"]
+    missing = [key for key in required_keys if not os.getenv(key)]
+    if missing:
+        print(f"CRITICAL: Configuration Missing -> {', '.join(missing)}")
+    return missing
+
+
+def discover_installed_apps():
+    """
+    Dynamically crawls Windows Start Menu folders to index every installed application.
+    Zero hardcoded user paths.
+    """
+    app_index = {}
+
+    program_data = os.environ.get('PROGRAMDATA', r'C:\ProgramData')
+    app_data = os.environ.get('APPDATA', '')
+
+    start_menu_paths = [
+        os.path.join(program_data, r'Microsoft\Windows\Start Menu\Programs'),
+        os.path.join(app_data, r'Microsoft\Windows\Start Menu\Programs')
+    ]
+
+    for base_path in start_menu_paths:
+        if not os.path.exists(base_path):
+            continue
+        for root, _, files in os.walk(base_path):
+            for file in files:
+                if not file.lower().endswith(('.lnk', '.exe')):
+                    continue
+                display_name = os.path.splitext(file)[0].lower()
+                clean_name = re.sub(r"[^a-z0-9]+", " ", display_name).strip()
+                if not clean_name:
+                    continue
+                if clean_name not in app_index:
+                    app_index[clean_name] = os.path.join(root, file)
+
+    return app_index
+
+def smart_launch(app_name):
+    """
+    Attempts to intelligently discover and launch an application by name.
+    """
+    app_name_clean = app_name.lower().strip()
+
+    if not app_name_clean:
+        return "No application name provided."
+
+    if shutil.which(app_name_clean):
+        os.system(f"start {app_name_clean}")
+        return f"Launched system utility: {app_name_clean}"
+
+    installed_apps = discover_installed_apps()
+    matches = difflib.get_close_matches(app_name_clean, installed_apps.keys(), n=1, cutoff=0.5)
+
+    if matches:
+        matched_name = matches[0]
+        shortcut_path = installed_apps[matched_name]
+        try:
+            os.startfile(shortcut_path)
+            return f"Dynamically discovered and opened {matched_name}"
+        except AttributeError:
+            subprocess.Popen([shortcut_path], shell=True)
+            return f"Opened shortcut via fallback execution: {matched_name}"
+        except Exception as exc:
+            return f"Failed to launch {matched_name}: {exc}"
+
+    return f"Could not locate an application named '{app_name}' on this system."
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
@@ -253,9 +368,8 @@ def start_voice_listener():
 
 @app.on_event("startup")
 def on_startup():
-    # Attempt to initialize DB tables if they don't exist
+    verify_required_config()
     database.init_db()
-    # Start system tray and Voice listener in non-blocking threads
     threading.Thread(target=setup_system_tray, daemon=True).start()
     threading.Thread(target=start_voice_listener, daemon=True).start()
 
@@ -623,11 +737,55 @@ def execute_command(
         intent=intent
     )
 
+def handle_command(user_input: str) -> Optional[dict]:
+    """Intent router for lightweight open/search operations without entering the vision loop."""
+    if not user_input or not isinstance(user_input, str):
+        return None
+
+    normalized_input = user_input.strip()
+    lowered = normalized_input.lower()
+
+    open_match = re.match(r"^(?:open|launch|start)\s+(.+)$", lowered)
+    if open_match:
+        app_key = open_match.group(1).strip().lower()
+        try:
+            result_message = smart_launch(app_key)
+        except Exception as exc:
+            print(f"[FAST LAUNCH] Failed to launch {app_key}: {exc}")
+            return {"status": "error", "message": str(exc)}
+
+        if "Could not locate" in result_message:
+            return {"status": "error", "message": result_message}
+
+        return {"status": "success", "message": "Success", "payload": result_message}
+
+    search_match = re.match(r"^(?:search|find)\s+(.+)$", lowered)
+    if search_match:
+        query = search_match.group(1).strip()
+        search_url = f"https://www.google.com/search?q={quote_plus(query)}"
+        webbrowser.open(search_url, new=2)
+        return {"status": "success", "message": f"Searching web for: {query}", "payload": search_url}
+
+    confidence = 0.0
+    if re.search(r"\b(open|launch|start|search|find)\b", lowered):
+        confidence = 0.85
+    elif len(normalized_input.split()) >= 2:
+        confidence = 0.6
+
+    if confidence < 0.8:
+        return {"status": "error", "message": "Did you mean search or open?"}
+
+    return None
+
+
 def capture_desktop_state() -> dict:
     """
     Capture the current primary desktop frame for local vision-style agent reasoning.
     Returns a lightweight state payload with image dimensions and an RGB array.
     """
+    if ImageGrab is None or np is None:
+        return {"width": 0, "height": 0, "rgb_array": None, "error": "Image capture dependencies are unavailable"}
+
     try:
         screenshot = ImageGrab.grab(all_screens=False)
         if screenshot is None:
@@ -651,6 +809,88 @@ def capture_desktop_state() -> dict:
         return {"width": 0, "height": 0, "rgb_array": None, "error": str(e)}
 
 
+def normalize_url(url: str) -> str:
+    url = url.strip()
+    if not url:
+        return url
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        if url.startswith("www."):
+            return "https://" + url
+        if re.match(r"^[\w-]+(\.[\w-]+)+.*$", url):
+            return "https://" + url
+    return url
+
+
+def parse_simple_agent_intent(user_msg: str) -> Optional[dict]:
+    if not user_msg or not user_msg.strip():
+        return None
+
+    normalized = user_msg.strip()
+    lower = normalized.lower()
+
+    url_match = re.match(r"^(?:open|go to)\s+(?P<url>(?:https?://|http://|www\.)\S+)$", lower)
+    if url_match:
+        return {"type": "open_url", "url": normalize_url(url_match.group("url"))}
+
+    host_match = re.match(r"^(?:open|go to)\s+(?P<host>[\w.-]+\.[a-z]{2,6}(?:/\S*)?)$", lower)
+    if host_match:
+        return {"type": "open_url", "url": normalize_url(host_match.group("host"))}
+
+    search_match = re.match(r"^(?:search|find)(?: for)?\s+(?P<query>.+)$", lower)
+    if search_match:
+        return {"type": "search", "query": search_match.group("query").strip()}
+
+    quick_app_match = re.match(r"^(?:open|launch|start)\s+(.+)$", lower)
+    if quick_app_match:
+        return {"type": "open_app", "app": quick_app_match.group(1).strip()}
+
+    direct_site_match = re.match(r"^(?:open|go to)\s+(google|youtube|github|stackoverflow)$", lower)
+    if direct_site_match:
+        site = direct_site_match.group(1)
+        url_map = {
+            "google": "https://www.google.com",
+            "youtube": "https://www.youtube.com",
+            "github": "https://www.github.com",
+            "stackoverflow": "https://stackoverflow.com"
+        }
+        return {"type": "open_url", "url": url_map.get(site, "https://www.google.com")}
+
+    return None
+
+
+def execute_simple_agent_intent(intent: dict) -> dict:
+    try:
+        if intent.get("type") == "open_url":
+            url = normalize_url(str(intent.get("url", "")).strip())
+            if not url:
+                return {"status": "error", "message": "Invalid URL provided."}
+            webbrowser.open(url, new=2)
+            return {"status": "success", "message": f"Opened URL: {url}", "execution_type": "BROWSER_URL", "payload": url}
+
+        if intent.get("type") == "search":
+            query = str(intent.get("query", "")).strip()
+            if not query:
+                return {"status": "error", "message": "Search query was empty."}
+            url = f"https://www.google.com/search?q={quote_plus(query)}"
+            webbrowser.open(url, new=2)
+            return {"status": "success", "message": f"Searching Google for: {query}", "execution_type": "BROWSER_URL", "payload": url}
+
+        if intent.get("type") == "open_app":
+            app_alias = str(intent.get("app", "")).strip()
+            result_message = smart_launch(app_alias)
+            return {
+                "status": "success" if "Could not locate" not in result_message else "error",
+                "message": result_message,
+                "execution_type": "SHELL_COMMAND",
+                "payload": app_alias,
+            }
+
+        return {"status": "none", "message": "No simple routing rule matched."}
+    except Exception as e:
+        print(f"[FAST ROUTER] Failed to execute simple intent: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 def execute_agent_action(action: dict) -> dict:
     """
     Native desktop action executor for the autonomous Computer Use Agent loop.
@@ -658,6 +898,9 @@ def execute_agent_action(action: dict) -> dict:
     """
     if not isinstance(action, dict):
         return {"status": "error", "message": "Action payload must be an object."}
+
+    if pyautogui is None:
+        return {"status": "error", "message": "pyautogui is not available in this environment."}
 
     action_type = str(action.get("action", "")).upper()
     try:
@@ -701,6 +944,9 @@ def execute_system_action(steps: list) -> dict:
     """
     if not steps:
         return {"status": "none", "message": "No automation steps to execute."}
+
+    if pyautogui is None or pyperclip is None:
+        return {"status": "error", "message": "Desktop automation dependencies are not available in this environment."}
 
     executed_steps = []
     try:
@@ -821,6 +1067,39 @@ def assistant_chat(
 ):
     user_msg = req.message
 
+    fast_command_result = handle_command(user_msg)
+    if fast_command_result is not None:
+        return models.ChatResponse(
+            response=fast_command_result.get("message", "Success"),
+            intent="SYSTEM_COMMAND",
+            action="none",
+            execution_type="SHELL_COMMAND",
+            payload=fast_command_result.get("payload"),
+            steps=[]
+        )
+
+    # Fast-path simple commands before entering vision-based inference.
+    simple_intent = parse_simple_agent_intent(user_msg)
+    if simple_intent is not None:
+        simple_result = execute_simple_agent_intent(simple_intent)
+        if simple_result.get("status") == "success":
+            return models.ChatResponse(
+                response=simple_result.get("message", "Executed command."),
+                intent="SYSTEM_COMMAND",
+                action="none",
+                execution_type=simple_result.get("execution_type", "BROWSER_URL"),
+                payload=simple_result.get("payload"),
+                steps=[]
+            )
+        return models.ChatResponse(
+            response=simple_result.get("message", "Command routing failed."),
+            intent="SYSTEM_COMMAND",
+            action="none",
+            execution_type=simple_result.get("execution_type", "none"),
+            payload=simple_result.get("payload"),
+            steps=[]
+        )
+
     # 1. Fetch conversational history from the DB (last 5 message exchanges)
     db_history = []
     try:
@@ -835,7 +1114,7 @@ def assistant_chat(
         print(f"Failed to query database context history: {e}")
 
     # 2. Run an autonomous perception-action loop with the local Ollama model.
-    url = "http://localhost:11434/api/chat"
+url = OLLAMA_ENDPOINT
 
     def build_system_prompt() -> str:
         return (
@@ -1048,5 +1327,5 @@ def get_system_logs(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8000)
-
+    parsed_backend = urlparse(BACKEND_URL)
+    uvicorn.run(app, host=parsed_backend.hostname or "127.0.0.1", port=int(parsed_backend.port or 8000))

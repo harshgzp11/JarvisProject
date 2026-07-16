@@ -56,6 +56,14 @@ class ExecuteSystemActionTests(unittest.TestCase):
         hotkey_mock.assert_any_call("ctrl", "s")
         popen_mock.assert_called_once_with("notepad.exe", shell=True)
 
+    def test_handle_command_uses_fast_launch_map_for_open_requests(self):
+        with patch("main.subprocess.Popen") as popen_mock:
+            result = main.handle_command("open calculator")
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["message"], "Success")
+        popen_mock.assert_called_once_with(main.FAST_LAUNCH_MAP["calculator"], shell=True)
+
 
 if __name__ == "__main__":
     unittest.main()
