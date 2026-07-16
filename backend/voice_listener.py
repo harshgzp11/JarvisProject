@@ -1,16 +1,20 @@
 import io
 import logging
-import os
 import re
 import threading
 import time
 import wave
 
+# All config (BACKEND_URL, etc.) is sourced from the central config module.
+# config.py handles .env loading — do NOT call load_dotenv() or os.getenv() here.
+import config as cfg
+
 import numpy as np
 import requests
 import sounddevice as sd
 
-API_URL = "http://127.0.0.1:8000/api/assistant/chat"
+# Endpoint is resolved from config — no hardcoded IPs anywhere in this file.
+API_URL = cfg.BACKEND_URL + "/api/assistant/chat"
 WAKE_KEYWORDS = ["hey jarvis", "jarvis"]
 SAMPLE_RATE = 16000
 CHANNELS = 1

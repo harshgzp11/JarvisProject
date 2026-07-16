@@ -1,4 +1,10 @@
-﻿import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+
+// ── Single source of truth for the backend API endpoint ─────────────────────
+// Reads from frontend/.env  →  VITE_API_BASE_URL=http://localhost:8000
+// Change that value (never this line) when deploying to staging or production.
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
 
 const parseJwt = (token) => {
   try {
@@ -44,7 +50,7 @@ function App() {
     const savedToken = localStorage.getItem('jarvis_token');
     if (!savedToken) return;
     try {
-      const response = await fetch('http://localhost:8000/api/system/files', {
+      const response = await fetch(`${API_BASE}/api/system/files`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${savedToken}`
@@ -150,7 +156,7 @@ function App() {
     const savedToken = localStorage.getItem('jarvis_token');
     if (!savedToken) return;
     try {
-      const response = await fetch('http://localhost:8000/api/system/logs', {
+      const response = await fetch(`${API_BASE}/api/system/logs`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${savedToken}`
@@ -170,7 +176,7 @@ function App() {
     if (!isAuthenticated) return;
     const fetchMetrics = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/system/metrics');
+        const response = await fetch(`${API_BASE}/api/system/metrics`);
         if (response.ok) {
           const data = await response.json();
           setMetrics({ cpu: data.cpu, ram: data.ram });
@@ -223,7 +229,7 @@ function App() {
       const savedToken = localStorage.getItem('jarvis_token') || token;
       addLog({ type: 'info', message: `dispatch_quick_action: "${message}"` });
       
-      const response = await fetch('http://localhost:8000/api/assistant/chat', {
+      const response = await fetch(`${API_BASE}/api/assistant/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -277,7 +283,7 @@ function App() {
         return;
       }
       try {
-        const response = await fetch('http://localhost:8000/api/auth/verify', {
+        const response = await fetch(`${API_BASE}/api/auth/verify`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${savedToken}`
@@ -327,7 +333,7 @@ function App() {
   useEffect(() => {
     const fetchConfig = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/auth/google/config');
+        const response = await fetch(`${API_BASE}/api/auth/google/config`);
         if (response.ok) {
           const data = await response.json();
           setGoogleClientId(data.client_id);
@@ -347,7 +353,7 @@ function App() {
         setIsSigningIn(true);
         setAuthError('');
         try {
-          const response = await fetch('http://localhost:8000/api/auth/google/verify', {
+          const response = await fetch(`${API_BASE}/api/auth/google/verify`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
@@ -403,7 +409,7 @@ function App() {
     
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` + 
       `client_id=${googleClientId}` + 
-      `&redirect_uri=http://localhost:8000/api/auth/google/callback` + 
+      `&redirect_uri=${API_BASE}/api/auth/google/callback` + 
       `&response_type=id_token` + 
       `&scope=openid%20email%20profile` + 
       `&state=${state}` + 
@@ -437,7 +443,7 @@ function App() {
 
     try {
       const savedToken = localStorage.getItem('jarvis_token') || token;
-      const response = await fetch('http://localhost:8000/api/assistant/chat', {
+      const response = await fetch(`${API_BASE}/api/assistant/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -560,18 +566,26 @@ function App() {
                   try {
                     setIsSigningIn(true);
                     setAuthError('');
-                    const response = await fetch('http://localhost:8000/api/auth/google/verify', {
+                    // Token is read from VITE_MOCK_AUTH_TOKEN in frontend/.env
+                    // It must match MOCK_AUTH_TOKEN in backend/.env exactly.
+                    const mockToken = import.meta.env.VITE_MOCK_AUTH_TOKEN;
+                    if (!mockToken) {
+                      setAuthError('VITE_MOCK_AUTH_TOKEN is not set in frontend/.env');
+                      setIsSigningIn(false);
+                      return;
+                    }
+                    const response = await fetch(`${API_BASE}/api/auth/google/verify`, {
                       method: 'POST',
                       headers: {
                         'Content-Type': 'application/json'
                       },
-                      body: JSON.stringify({ token: 'mock_google_id_token' })
+                      body: JSON.stringify({ token: mockToken })
                     });
                     const data = await response.json();
                     if (response.ok && data.token) {
                       const userInfo = {
-                        name: 'Test Operator',
-                        email: 'operator@jarvis.local',
+                        name: 'Jarvis Dev User',
+                        email: 'dev@jarvis.local',
                         picture: ''
                       };
                       localStorage.setItem('jarvis_token', data.token);

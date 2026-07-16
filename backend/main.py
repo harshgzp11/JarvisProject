@@ -7,6 +7,7 @@ try:
 except ImportError:
     ollama = None
 import json
+import logging
 from pydantic import ValidationError
 from google.oauth2 import id_token
 from google.auth.transport import requests
@@ -83,6 +84,10 @@ import database
 import models
 import os_tools
 
+# Configure module-level logger (used throughout for CRITICAL/WARNING startup events)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+logger = logging.getLogger("jarvis.main")
+
 app = FastAPI(title="Jarvis Backend", description="AI-Driven Desktop Assistant API")
 
 # Setup CORS for the React frontend
@@ -96,43 +101,67 @@ app.add_middleware(
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(ROOT_DIR, ".env"))
-load_dotenv(os.path.join(BACKEND_DIR, ".env"))
-load_dotenv()
 
-# Security Configurations
-SECRET_KEY = os.getenv("JWT_SECRET", os.getenv("JWT_SECRET_KEY", ""))
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 120
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
-OLLAMA_ENDPOINT = os.getenv("OLLAMA_ENDPOINT", "http://localhost:11434/api/chat")
-WORKSPACE_DIR = os.getenv("WORKSPACE_PATH", os.path.join(os.path.expanduser("~"), "JarvisWorkspace"))
+# ── Import all configuration from the central config module ─────────────────
+# config.py handles .env loading, exports clean named constants, and validates
+# required keys.  Do NOT call os.getenv() directly in this file.
+import config as cfg
+
+JWT_SECRET     = cfg.JWT_SECRET
+SECRET_KEY     = cfg.JWT_SECRET          # alias used by jose/jwt helpers below
+ALGORITHM     = cfg.ALGORITHM
+ACCESS_TOKEN_EXPIRE_MINUTES = cfg.ACCESS_TOKEN_EXPIRE_MINUTES
+GOOGLE_CLIENT_ID = cfg.GOOGLE_CLIENT_ID
+BACKEND_URL   = cfg.BACKEND_URL
+OLLAMA_ENDPOINT = cfg.OLLAMA_ENDPOINT
+OLLAMA_MODEL  = cfg.OLLAMA_MODEL
+WORKSPACE_DIR = cfg.WORKSPACE_PATH
 
 
 def verify_required_config() -> list[str]:
-    required_keys = ["DB_HOST", "DB_PORT", "JWT_SECRET", "BACKEND_URL", "OLLAMA_ENDPOINT", "WORKSPACE_PATH"]
-    missing = [key for key in required_keys if not os.getenv(key)]
-    if missing:
-        print(f"CRITICAL: Configuration Missing -> {', '.join(missing)}")
-    return missing
+    """Delegates to config.verify_required_config() which owns the required-key list."""
+    return cfg.verify_required_config()
 
+
+_app_index_cache = None
 
 def discover_installed_apps():
     """
-    Dynamically crawls Windows Start Menu folders to index every installed application.
-    Zero hardcoded user paths.
+    Dynamically crawls installed applications using PowerShell Get-StartApps (covers UWP and Desktop apps)
+    and falls back to Start Menu folders. Caches the result to prevent lag on subsequent calls.
     """
-    app_index = {}
+    global _app_index_cache
+    if _app_index_cache is not None:
+        return _app_index_cache
 
+    app_index = {}
+    
+    # 1. Use Get-StartApps for comprehensive listing (UWP + standard apps)
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-StartApps | ConvertTo-Json"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0 and result.stdout:
+            apps = json.loads(result.stdout)
+            for app in apps:
+                name = app.get("Name", "")
+                appid = app.get("AppID", "")
+                if name and appid:
+                    clean_name = re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+                    if clean_name:
+                        app_index[clean_name] = f"shell:AppsFolder\\{appid}"
+    except Exception as e:
+        print(f"[APP DISCOVERY] Failed to run Get-StartApps: {e}")
+
+    # 2. Fallback to manually crawling Start Menu
     program_data = os.environ.get('PROGRAMDATA', r'C:\ProgramData')
     app_data = os.environ.get('APPDATA', '')
-
     start_menu_paths = [
         os.path.join(program_data, r'Microsoft\Windows\Start Menu\Programs'),
         os.path.join(app_data, r'Microsoft\Windows\Start Menu\Programs')
     ]
-
     for base_path in start_menu_paths:
         if not os.path.exists(base_path):
             continue
@@ -142,11 +171,11 @@ def discover_installed_apps():
                     continue
                 display_name = os.path.splitext(file)[0].lower()
                 clean_name = re.sub(r"[^a-z0-9]+", " ", display_name).strip()
-                if not clean_name:
-                    continue
-                if clean_name not in app_index:
+                if clean_name and clean_name not in app_index:
                     app_index[clean_name] = os.path.join(root, file)
 
+    # 3. Cache and return
+    _app_index_cache = app_index
     return app_index
 
 def smart_launch(app_name):
@@ -163,13 +192,22 @@ def smart_launch(app_name):
         return f"Launched system utility: {app_name_clean}"
 
     installed_apps = discover_installed_apps()
-    matches = difflib.get_close_matches(app_name_clean, installed_apps.keys(), n=1, cutoff=0.5)
+    
+    # Check for exact matches first
+    if app_name_clean in installed_apps:
+        matches = [app_name_clean]
+    else:
+        # Increase cutoff to 0.75 to prevent absurd matches like 'calculator' -> 'narrator'
+        matches = difflib.get_close_matches(app_name_clean, installed_apps.keys(), n=1, cutoff=0.75)
 
     if matches:
         matched_name = matches[0]
         shortcut_path = installed_apps[matched_name]
         try:
-            os.startfile(shortcut_path)
+            if shortcut_path.startswith("shell:AppsFolder\\"):
+                subprocess.Popen(["explorer", shortcut_path], shell=True)
+            else:
+                os.startfile(shortcut_path)
             return f"Dynamically discovered and opened {matched_name}"
         except AttributeError:
             subprocess.Popen([shortcut_path], shell=True)
@@ -210,7 +248,8 @@ def get_current_user(authorization: Optional[str] = Header(None), db: Session = 
 
 is_jarvis_muted = False
 is_recording_voice = False
-WORKSPACE_DIR = "C:\\Users\\Public\\JarvisWorkspace"
+# WORKSPACE_DIR is resolved from the .env WORKSPACE_PATH key (set at line 110).
+# Do NOT reassign here — the value from os.getenv above is the single source of truth.
 
 def ensure_workspace_dir():
     try:
@@ -331,12 +370,14 @@ def record_and_transcribe():
         import models
         db = SessionLocal()
         from database import User
-        dev_user = db.query(User).filter(User.email == "test@example.com").first()
+        # DEV_USER_EMAIL is sourced from .env — never hardcoded.
+        dev_email = cfg.DEV_USER_EMAIL
+        dev_user = db.query(User).filter(User.email == dev_email).first()
         if not dev_user:
             dev_user = User(
                 google_id="voice_system_user",
-                email="test@example.com",
-                full_name="Test Operator",
+                email=dev_email,
+                full_name=cfg.DEV_USER_NAME,
                 picture_url=""
             )
             db.add(dev_user)
@@ -368,7 +409,18 @@ def start_voice_listener():
 
 @app.on_event("startup")
 def on_startup():
-    verify_required_config()
+    missing = verify_required_config()
+    if not SECRET_KEY:
+        logger.critical(
+            "CRITICAL: JWT_SECRET is not set or is empty. "
+            "The server cannot issue or verify tokens. Set JWT_SECRET in your .env file."
+        )
+        raise RuntimeError(
+            "JWT_SECRET is missing from the environment. "
+            "Refusing to start without a valid secret key."
+        )
+    if missing:
+        logger.warning("Server starting with missing config keys: %s", ", ".join(missing))
     database.init_db()
     threading.Thread(target=setup_system_tray, daemon=True).start()
     threading.Thread(target=start_voice_listener, daemon=True).start()
@@ -388,13 +440,22 @@ def verify_google_token(req: models.GoogleAuthRequest, db: Session = Depends(dat
     and returns a JWT session token for application authentication.
     """
     try:
-        if req.token == "mock_google_id_token":
-            user = db.query(database.User).filter(database.User.email == "test@example.com").first()
+        # ── Mock / Dev Auth bypass ──────────────────────────────────────────
+        # Read live from os.getenv (not frozen cfg constants) so that changes
+        # to .env are reflected immediately after uvicorn auto-reloads.
+        # ENABLE_MOCK_AUTH must be "true" AND the token must match MOCK_AUTH_TOKEN.
+        # This block NEVER runs in production (ENABLE_MOCK_AUTH defaults to "false").
+        _mock_enabled = os.getenv("ENABLE_MOCK_AUTH", "false").lower() == "true"
+        _mock_token   = os.getenv("MOCK_AUTH_TOKEN", "")
+        if _mock_enabled and _mock_token and req.token == _mock_token:
+            dev_email = os.getenv("DEV_USER_EMAIL", "dev@jarvis.local")
+            dev_name  = os.getenv("DEV_USER_NAME",  "Jarvis Dev User")
+            user = db.query(database.User).filter(database.User.email == dev_email).first()
             if not user:
                 user = database.User(
-                    google_id="mock_google_id",
-                    email="test@example.com",
-                    full_name="Test Operator",
+                    google_id="mock_dev_user",
+                    email=dev_email,
+                    full_name=dev_name,
                     picture_url=""
                 )
                 db.add(user)
@@ -410,6 +471,7 @@ def verify_google_token(req: models.GoogleAuthRequest, db: Session = Depends(dat
                 message="Google authentication handshake complete (mock bypass).",
                 token=session_token
             )
+
 
         # Verify OAuth2 token signature, expiration, and audience check if client ID is set
         request_transport = requests.Request()
@@ -587,7 +649,7 @@ def parse_intent_with_llm(user_input: str) -> models.LLMIntent:
     """
     try:
         response = ollama.chat(
-            model='llama3.2:latest',
+            model=OLLAMA_MODEL,
             messages=[
                 {
                     'role': 'system',
@@ -654,32 +716,28 @@ def execute_command(
         if not app_alias:
             status, response_msg = "error", "Could not determine which application to launch."
         else:
-            # Look up in database
-            db_app = db.query(database.AppMapping).filter(database.AppMapping.alias_name.ilike(f"%{app_alias}%")).first()
-            
-            # fallback generic commands for common Windows apps if DB is empty
-            fallback_apps = {
-                "notepad": "notepad.exe",
-                "calculator": "calc.exe",
-                "calc": "calc.exe",
-                "paint": "mspaint.exe",
-                "browser": "msedge.exe",
-            }
-            
+            # 1. Check user-configured custom mappings in the database first.
+            db_app = db.query(database.AppMapping).filter(
+                database.AppMapping.alias_name.ilike(f"%{app_alias}%")
+            ).first()
+
             if db_app:
-                system_path = db_app.system_path
-            elif app_alias in fallback_apps:
-                system_path = fallback_apps[app_alias]
-            else:
-                system_path = None
-                
-            if system_path:
-                result = os_tools.launch_application(system_path)
+                # User has a pinned path — use it directly via os_tools.
+                result = os_tools.launch_application(db_app.system_path)
                 status = result["status"]
                 response_msg = result["message"]
             else:
-                status = "error"
-                response_msg = f"Application '{app_alias}' not found in mappings."
+                # 2. No DB entry — fall through to dynamic discovery via Start Menu indexer.
+                # smart_launch() crawls Start Menu directories and uses fuzzy matching.
+                # It also checks PATH (shutil.which) so system utilities like calc.exe
+                # and notepad.exe are found naturally without any hardcoded aliases.
+                launch_msg = smart_launch(app_alias)
+                if "Could not locate" in launch_msg:
+                    status = "error"
+                    response_msg = launch_msg
+                else:
+                    status = "success"
+                    response_msg = launch_msg
                 
     elif intent == "screenshot":
         result = os_tools.take_screenshot()
@@ -759,7 +817,7 @@ def handle_command(user_input: str) -> Optional[dict]:
 
         return {"status": "success", "message": "Success", "payload": result_message}
 
-    search_match = re.match(r"^(?:search|find)\s+(.+)$", lowered)
+    search_match = re.match(r"^(?:search|find)(?:\s+for)?\s+(.+)$", lowered)
     if search_match:
         query = search_match.group(1).strip()
         search_url = f"https://www.google.com/search?q={quote_plus(query)}"
@@ -836,7 +894,7 @@ def parse_simple_agent_intent(user_msg: str) -> Optional[dict]:
     if host_match:
         return {"type": "open_url", "url": normalize_url(host_match.group("host"))}
 
-    search_match = re.match(r"^(?:search|find)(?: for)?\s+(?P<query>.+)$", lower)
+    search_match = re.match(r"^(?:search|find)(?:\s+for)?\s+(?P<query>.+)$", lower)
     if search_match:
         return {"type": "search", "query": search_match.group("query").strip()}
 
@@ -1114,7 +1172,7 @@ def assistant_chat(
         print(f"Failed to query database context history: {e}")
 
     # 2. Run an autonomous perception-action loop with the local Ollama model.
-url = OLLAMA_ENDPOINT
+    url = OLLAMA_ENDPOINT
 
     def build_system_prompt() -> str:
         return (
@@ -1176,7 +1234,7 @@ url = OLLAMA_ENDPOINT
         ollama_messages.append({"role": "user", "content": loop_context})
 
         ollama_payload = {
-            "model": "llama3.2:latest",
+            "model": OLLAMA_MODEL,
             "messages": ollama_messages,
             "stream": False,
             "format": "json"
@@ -1243,7 +1301,8 @@ url = OLLAMA_ENDPOINT
             print(f"[JARVIS] Ollama engine unreachable or returned invalid JSON: {e}")
             response_text = (
                 f"Ollama engine is offline or returned an invalid response. "
-                f"Please ensure Llama 3.2 is running at localhost:11434. (Error: {type(e).__name__})"
+                f"Please ensure '{OLLAMA_MODEL}' is running at {OLLAMA_ENDPOINT}. "
+                f"(Error: {type(e).__name__})"
             )
             intent = "GENERAL_QUERY"
             steps = []
@@ -1329,3 +1388,5 @@ if __name__ == "__main__":
     import uvicorn
     parsed_backend = urlparse(BACKEND_URL)
     uvicorn.run(app, host=parsed_backend.hostname or "127.0.0.1", port=int(parsed_backend.port or 8000))
+
+

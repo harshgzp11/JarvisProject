@@ -1,37 +1,26 @@
-import os
 import urllib.parse  # Safely encodes special characters like '@'
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
-from dotenv import load_dotenv
 
-# 1. Load project root env first (general/fallback settings)
-parent_env = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-if os.path.exists(parent_env):
-    load_dotenv(parent_env)
+# All configuration is imported from the central config module.
+# config.py owns .env loading — do NOT call load_dotenv() or os.getenv() here.
+import config as cfg
 
-# 2. Load backend folder env next (more specific, overrides root settings)
-local_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-if os.path.exists(local_env):
-    load_dotenv(local_env, override=True)
+# ==========================================
+# DATABASE CONNECTION SETUP
+# ==========================================
 
-# 3. Load default env from CWD (overrides all)
-load_dotenv(override=True)
+# URL-encode the password so special characters like '@' become safe tokens (%40)
+encoded_password = urllib.parse.quote_plus(cfg.DB_PASSWORD)
 
-# 1. Fetch values from your .env file
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "")  # This contains your password with the '@'
-DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_PORT = os.getenv("DB_PORT", "3306")
-DB_NAME = os.getenv("DB_NAME", "jarvis_db")
+# Assemble the secure connection string using named constants from config
+DATABASE_URL = (
+    f"mysql+pymysql://{cfg.DB_USER}:{encoded_password}"
+    f"@{cfg.DB_HOST}:{cfg.DB_PORT}/{cfg.DB_NAME}"
+)
 
-# 2. URL-encode the password dynamically so characters like '@' turn into safe string tokens (like %40)
-encoded_password = urllib.parse.quote_plus(DB_PASSWORD)
-
-# 3. Assemble the secure connection string using the encoded password token
-DATABASE_URL = f"mysql+pymysql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-# 4. Create the engine and database session factory (fixed variable name mismatch)
+# Create the engine and database session factory
 engine = create_engine(DATABASE_URL, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -75,13 +64,16 @@ class AppMapping(Base):
 def init_db():
     try:
         # Connect without DB name to run CREATE DATABASE DDL if necessary
-        temp_url = f"mysql+pymysql://{DB_USER}:{encoded_password}@{DB_HOST}:{DB_PORT}"
+        temp_url = (
+            f"mysql+pymysql://{cfg.DB_USER}:{encoded_password}"
+            f"@{cfg.DB_HOST}:{cfg.DB_PORT}"
+        )
         temp_engine = create_engine(temp_url, isolation_level="AUTOCOMMIT")
         with temp_engine.connect() as conn:
-            conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {DB_NAME}"))
+            conn.execute(text(f"CREATE DATABASE IF NOT EXISTS {cfg.DB_NAME}"))
         temp_engine.dispose()
     except Exception as e:
-        print(f"Warning: Auto-creation of database '{DB_NAME}' failed: {e}")
+        print(f"Warning: Auto-creation of database '{cfg.DB_NAME}' failed: {e}")
 
     try:
         # Automatically generates the database tables on engine connection handshake
