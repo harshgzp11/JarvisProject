@@ -803,7 +803,7 @@ def handle_command(user_input: str) -> Optional[dict]:
     normalized_input = user_input.strip()
     lowered = normalized_input.lower()
 
-    open_match = re.match(r"^(?:open|launch|start)\s+(.+)$", lowered)
+    open_match = re.search(r"\b(?:open|launch|start)\s+(.+)$", lowered)
     if open_match:
         app_key = open_match.group(1).strip().lower()
         try:
@@ -817,7 +817,7 @@ def handle_command(user_input: str) -> Optional[dict]:
 
         return {"status": "success", "message": "Success", "payload": result_message}
 
-    search_match = re.match(r"^(?:search|find)(?:\s+for)?\s+(.+)$", lowered)
+    search_match = re.search(r"\b(?:search|find)(?:\s+for)?\s+(.+)$", lowered)
     if search_match:
         query = search_match.group(1).strip()
         search_url = f"https://www.google.com/search?q={quote_plus(query)}"
@@ -886,23 +886,23 @@ def parse_simple_agent_intent(user_msg: str) -> Optional[dict]:
     normalized = user_msg.strip()
     lower = normalized.lower()
 
-    url_match = re.match(r"^(?:open|go to)\s+(?P<url>(?:https?://|http://|www\.)\S+)$", lower)
+    url_match = re.search(r"\b(?:open|go to)\s+(?P<url>(?:https?://|http://|www\.)\S+)$", lower)
     if url_match:
         return {"type": "open_url", "url": normalize_url(url_match.group("url"))}
 
-    host_match = re.match(r"^(?:open|go to)\s+(?P<host>[\w.-]+\.[a-z]{2,6}(?:/\S*)?)$", lower)
+    host_match = re.search(r"\b(?:open|go to)\s+(?P<host>[\w.-]+\.[a-z]{2,6}(?:/\S*)?)$", lower)
     if host_match:
         return {"type": "open_url", "url": normalize_url(host_match.group("host"))}
 
-    search_match = re.match(r"^(?:search|find)(?:\s+for)?\s+(?P<query>.+)$", lower)
+    search_match = re.search(r"\b(?:search|find)(?:\s+for)?\s+(?P<query>.+)$", lower)
     if search_match:
         return {"type": "search", "query": search_match.group("query").strip()}
 
-    quick_app_match = re.match(r"^(?:open|launch|start)\s+(.+)$", lower)
+    quick_app_match = re.search(r"\b(?:open|launch|start)\s+(.+)$", lower)
     if quick_app_match:
         return {"type": "open_app", "app": quick_app_match.group(1).strip()}
 
-    direct_site_match = re.match(r"^(?:open|go to)\s+(google|youtube|github|stackoverflow)$", lower)
+    direct_site_match = re.search(r"\b(?:open|go to)\s+(google|youtube|github|stackoverflow)$", lower)
     if direct_site_match:
         site = direct_site_match.group(1)
         url_map = {

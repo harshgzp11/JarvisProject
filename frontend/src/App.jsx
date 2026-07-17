@@ -1371,65 +1371,161 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen w-screen bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),transparent_25%),radial-gradient(circle_at_bottom_right,_rgba(168,85,247,0.1),transparent_20%),#020617] text-zinc-100 font-sans antialiased">
-      <div className="mx-auto flex min-h-screen flex-col items-center justify-center px-6 text-center">
-        <p className="text-xs uppercase tracking-[0.4em] text-zinc-500 mb-4 font-semibold">Jarvis Command Canvas</p>
-        <h1 className="text-5xl sm:text-6xl font-extrabold text-white mb-4">Minimal desktop launcher</h1>
-        <p className="max-w-2xl text-sm leading-8 text-zinc-400">
-          A calm, modern canvas for your Jarvis workflow. The command pill is already available below—type, speak, and send when ready.
-        </p>
-      </div>
+    <div className="flex h-screen bg-[#131314] text-zinc-100 font-sans overflow-hidden">
+            {/* Left Minimal Icon Sidebar */}
+      <div className="w-[68px] flex flex-col items-center justify-between shrink-0 transition-all duration-300 z-50 py-4 bg-[#1e1f22]/50 border-r border-white/5">
+        <div className="flex flex-col items-center gap-5 w-full">
+          {/* Top Logo Area (Sparkle) */}
+          <button 
+            onClick={() => setActiveTab('dashboard')} 
+            title="Jarvis" 
+            className="cursor-pointer mb-2 hover:bg-white/10 transition-colors flex items-center justify-center w-11 h-11 rounded-full text-indigo-400"
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6">
+               <path d="M12 2l2.4 7.6H22l-6.2 4.5 2.4 7.6-6.2-4.5-6.2 4.5 2.4-7.6L2 9.6h7.6L12 2z" />
+            </svg>
+          </button>
 
-      <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center px-4 pb-6">
-        <div className="w-full max-w-2xl rounded-full border border-zinc-800/80 bg-zinc-900/95 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur-md flex flex-col gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <input
-                ref={overlayInputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder="Ask Jarvis.."
-                className="w-full bg-transparent border-none text-lg text-zinc-100 placeholder-zinc-500 focus:outline-none"
-              />
+          {/* Minimal Icon Nav Items */}
+          <button 
+            onClick={() => { setMessages([]); setInput(''); setActiveTab('dashboard'); }} 
+            title="New Chat" 
+            className="flex items-center justify-center w-10 h-10 rounded-full transition-colors text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+          >
+             <svg className="w-[22px] h-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('assistant')} 
+            title="Search / Assistant" 
+            className={`flex items-center justify-center w-10 h-10 rounded-full transition-colors ${activeTab === 'assistant' ? 'bg-white/10 text-white' : 'text-zinc-400 hover:bg-white/10 hover:text-zinc-200'}`}
+          >
+             <svg className="w-[22px] h-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('dashboard')} 
+            title="Gallery" 
+            className="flex items-center justify-center w-10 h-10 rounded-full transition-colors text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+          >
+             <svg className="w-[22px] h-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+          </button>
+
+          <button 
+            onClick={() => setActiveTab('dashboard')} 
+            title="Files" 
+            className="flex items-center justify-center w-10 h-10 rounded-full transition-colors text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+          >
+             <svg className="w-[22px] h-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('dashboard')} 
+            title="Apps" 
+            className="flex items-center justify-center w-10 h-10 rounded-full transition-colors text-zinc-400 hover:bg-white/10 hover:text-zinc-200"
+          >
+             <svg className="w-[22px] h-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2H6a2 2 0 01-2-2v-4zM14 16a2 2 0 012-2h2a2 2 0 012 2v4a2 2 0 01-2 2h-2a2 2 0 01-2-2v-4z" /></svg>
+          </button>
+        </div>
+
+        {/* Bottom Section: Settings & Profile */}
+        <div className="flex flex-col items-center gap-3 w-full">
+          <button 
+            onClick={() => setActiveTab('settings')} 
+            title="Settings" 
+            className={`flex items-center justify-center w-10 h-10 rounded-full transition-colors ${activeTab === 'settings' ? 'bg-white/10 text-white' : 'text-zinc-400 hover:bg-white/10 hover:text-zinc-200'}`}
+          >
+            <svg className="w-[22px] h-[22px]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
+          
+          <button 
+            onClick={() => setActiveTab('profile')} 
+            title="Profile" 
+            className={`flex items-center justify-center w-[30px] h-[30px] rounded-full transition-colors mb-2 ${activeTab === 'profile' ? 'ring-2 ring-white/20 ring-offset-2 ring-offset-[#131314]' : ''}`}
+          >
+            {user.picture ? (
+              <img src={user.picture} alt="Profile" className="w-full h-full rounded-full object-cover" />
+            ) : (
+              <div className="w-full h-full rounded-full bg-[#3b4b5e] flex items-center justify-center text-[11px] font-semibold text-white/90">
+                {user.name ? user.name.charAt(0).toUpperCase() : 'H'}
+              </div>
+            )}
+          </button>
+        </div>
+      </div>\n\n      {/* Main Original UI Area */}
+      <div className="flex-1 relative overflow-y-auto bg-[#131314] scrollbar-thin">
+        
+        {activeTab === 'dashboard' || activeTab === 'assistant' ? (
+          <>
+            <div className="mx-auto flex min-h-full flex-col items-center justify-center px-6 text-center pb-32">
+              <p className="text-xs uppercase tracking-[0.4em] text-zinc-500 mb-4 font-semibold">Jarvis Command Canvas</p>
+              <h1 className="text-5xl sm:text-6xl font-extrabold text-white mb-4">Minimal desktop launcher</h1>
+              <p className="max-w-2xl text-sm leading-8 text-zinc-400">
+                A calm, modern canvas for your Jarvis workflow. The command pill is already available below—type, speak, and send when ready.
+              </p>
             </div>
 
-            <button
-              type="button"
-              onClick={toggleVoiceRecognition}
-              disabled={!speechSupported}
-              className={`flex h-12 w-12 items-center justify-center rounded-full transition ${isListening ? 'bg-red-500/20 ring-2 ring-red-500 text-red-300 animate-pulse' : speechSupported ? 'bg-zinc-950/90 text-zinc-200 hover:bg-zinc-900' : 'bg-zinc-700/80 text-zinc-500 cursor-not-allowed'}`}
-              title={speechSupported ? (isListening ? 'Listening...' : 'Start voice input') : 'Voice recognition not supported'}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-                <path d="M12 1v11" />
-                <path d="M5 10a7 7 0 0014 0" />
-                <path d="M19 10v2a7 7 0 01-14 0v-2" />
-                <path d="M8 18.5a4 4 0 008 0" />
-              </svg>
-            </button>
+            {/* Original Bottom Pill */}
+            <div className="absolute bottom-0 left-0 right-0 flex justify-center px-4 pb-6 pointer-events-none z-40">
+              <div className="w-full max-w-2xl rounded-full border border-zinc-800/80 bg-zinc-900/95 px-4 py-3 shadow-2xl shadow-black/40 backdrop-blur-md flex flex-col gap-3 pointer-events-auto">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <input
+                      ref={overlayInputRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSend();
+                        }
+                      }}
+                      placeholder="Ask Jarvis.."
+                      className="w-full bg-transparent border-none text-lg text-zinc-100 placeholder-zinc-500 focus:outline-none"
+                    />
+                  </div>
 
-            <button
-              onClick={() => handleSend()}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-400"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-                <path d="M5 12h14" />
-                <path d="M13 6l6 6-6 6" />
-              </svg>
-            </button>
-          </div>
+                  <button
+                    type="button"
+                    onClick={toggleVoiceRecognition}
+                    disabled={!speechSupported}
+                    className={`flex h-12 w-12 items-center justify-center rounded-full transition ${isListening ? 'bg-red-500/20 ring-2 ring-red-500 text-red-300 animate-pulse' : speechSupported ? 'bg-zinc-950/90 text-zinc-200 hover:bg-zinc-900' : 'bg-zinc-700/80 text-zinc-500 cursor-not-allowed'}`}
+                    title={speechSupported ? (isListening ? 'Listening...' : 'Start voice input') : 'Voice recognition not supported'}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                      <path d="M12 1v11" />
+                      <path d="M5 10a7 7 0 0014 0" />
+                      <path d="M19 10v2a7 7 0 01-14 0v-2" />
+                      <path d="M8 18.5a4 4 0 008 0" />
+                    </svg>
+                  </button>
 
-          <div className="flex flex-wrap justify-between gap-3 text-[10px] text-zinc-500">
-            {!speechSupported && <span className="text-rose-400">Voice recognition not supported in this browser.</span>}
-            {speechSupported && isListening && <span className="text-emerald-300">Listening... speak now.</span>}
+                  <button
+                    onClick={() => handleSend()}
+                    className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-500 text-white shadow-lg shadow-blue-500/20 transition hover:bg-blue-400"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                      <path d="M5 12h14" />
+                      <path d="M13 6l6 6-6 6" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap justify-between gap-3 text-[10px] text-zinc-500">
+                  {!speechSupported && <span className="text-rose-400">Voice recognition not supported in this browser.</span>}
+                  {speechSupported && isListening && <span className="text-emerald-300">Listening... speak now.</span>}
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="max-w-7xl mx-auto px-4 md:px-8 py-8 min-h-full bg-zinc-950/40">
+             {renderTabContent()}
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
