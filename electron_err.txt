@@ -1,5 +1,0 @@
-Backend stderr: 'C:\Users\Harsh' is not recognized as an internal or external command,
-operable program or batch file.
-
-[20516:0706/212149.613:INFO:CONSOLE(8)] "Preload script initialized successfully.", source:  (8)
-[20516:0706/212149.675:INFO:CONSOLE(9)] "Uncaught ReferenceError: toggleAuthMode is not defined", source: file:///C:/Users/Harsh%20Srivastava/OneDrive/Documents/JarvisProject-main/JarvisProject-main/dist/Jarvis-win32-x64/resources/app/frontend/dist/assets/index-CCo8aOZB.js (9)
