@@ -1455,7 +1455,7 @@ function App() {
             )}
           </button>
         </div>
-      </div>\n\n      {/* Main Original UI Area */}
+      </div>{/* Main Original UI Area */}
       <div className="flex-1 relative overflow-y-auto bg-[#131314] scrollbar-thin">
         
         {activeTab === 'dashboard' || activeTab === 'assistant' ? (

@@ -36,5 +36,3 @@ class ChatResponse(BaseModel):
     payload: Optional[str] = Field(default=None, description="The raw shell command, Python snippet, or URL to execute")
     steps: Optional[list[Step]] = Field(default=None, description="Ordered list of GUI execution steps")
 
-
-

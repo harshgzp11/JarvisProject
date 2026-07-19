@@ -88,3 +88,21 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False) # Linked to the 'users' table
+    title = Column(String(255), nullable=True) # E.g., "Cricket Scores"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Message(Base):
+    __tablename__ = "messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, nullable=False) # Linked to the 'conversations' table
+    sender = Column(String(50), nullable=False) # 'user' or 'ai'
+    content = Column(Text, nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow)

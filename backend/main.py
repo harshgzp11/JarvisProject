@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 try:
     import ollama
 except ImportError:
-    ollama = None
+    ollama = None  # type: ignore
 import json
 import logging
 from pydantic import ValidationError
@@ -15,13 +15,12 @@ from jose import jwt
 from datetime import datetime, timedelta
 import os
 import shutil
-from typing import Optional
+from typing import Optional, Any, Dict, List
 import requests as http_requests
 import threading
 import re
 import subprocess
 import webbrowser
-import tempfile
 import difflib
 import time
 from urllib.parse import quote_plus, urlparse
@@ -34,61 +33,84 @@ except ImportError:
 try:
     import pyautogui
 except ImportError:
-    pyautogui = None
+    pyautogui = None  # type: ignore
 
 try:
     import pyperclip
 except ImportError:
-    pyperclip = None
+    pyperclip = None  # type: ignore
 
 try:
     import pygetwindow as gw
 except ImportError:
-    gw = None
+    gw = None  # type: ignore
 
 try:
     from PIL import Image, ImageDraw, ImageGrab
 except ImportError:
-    Image = None
-    ImageDraw = None
-    ImageGrab = None
+    Image = None  # type: ignore
+    ImageDraw = None  # type: ignore
+    ImageGrab = None  # type: ignore
 
 try:
     import cv2
 except ImportError:
-    cv2 = None
+    cv2 = None  # type: ignore
 
 try:
     import numpy as np
 except ImportError:
-    np = None
+    np = None  # type: ignore
 try:
     import winshell
 except ImportError:
-    winshell = None
+    winshell = None  # type: ignore
 try:
     from win32com.client import Dispatch
 except ImportError:
-    Dispatch = None
+    Dispatch = None  # type: ignore
 try:
     import pystray
     from pystray import MenuItem as item
 except ImportError:
-    pystray = None
+    pystray = None  # type: ignore
 try:
     import keyboard
 except ImportError:
-    keyboard = None
+    keyboard = None  # type: ignore
 
 import database
 import models
 import os_tools
+from database import SessionLocal, Message
+
 
 # Configure module-level logger (used throughout for CRITICAL/WARNING startup events)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 logger = logging.getLogger("jarvis.main")
 
-app = FastAPI(title="Jarvis Backend", description="AI-Driven Desktop Assistant API")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    missing = verify_required_config()
+    if not SECRET_KEY:
+        logger.critical(
+            "CRITICAL: JWT_SECRET is not set or is empty. "
+            "The server cannot issue or verify tokens. Set JWT_SECRET in your .env file."
+        )
+        raise RuntimeError(
+            "JWT_SECRET is missing from the environment. "
+            "Refusing to start without a valid secret key."
+        )
+    if missing:
+        logger.warning("Server starting with missing config keys: %s", ", ".join(missing))
+    database.init_db()
+    threading.Thread(target=setup_system_tray, daemon=True).start()
+    threading.Thread(target=start_voice_listener, daemon=True).start()
+    yield
+
+app = FastAPI(title="Jarvis Backend", description="AI-Driven Desktop Assistant API", lifespan=lifespan)
 
 # Setup CORS for the React frontend
 app.add_middleware(
@@ -407,23 +429,7 @@ def start_voice_listener():
     except Exception as e:
         print(f"Failed to start keyboard listener: {e}")
 
-@app.on_event("startup")
-def on_startup():
-    missing = verify_required_config()
-    if not SECRET_KEY:
-        logger.critical(
-            "CRITICAL: JWT_SECRET is not set or is empty. "
-            "The server cannot issue or verify tokens. Set JWT_SECRET in your .env file."
-        )
-        raise RuntimeError(
-            "JWT_SECRET is missing from the environment. "
-            "Refusing to start without a valid secret key."
-        )
-    if missing:
-        logger.warning("Server starting with missing config keys: %s", ", ".join(missing))
-    database.init_db()
-    threading.Thread(target=setup_system_tray, daemon=True).start()
-    threading.Thread(target=start_voice_listener, daemon=True).start()
+
 
 @app.get("/")
 def read_root():
@@ -673,6 +679,8 @@ def parse_intent_with_llm(user_input: str) -> models.LLMIntent:
             format=models.LLMIntent.model_json_schema()
         )
         content = response.message.content
+        if not content:
+            raise ValueError("LLM returned empty response")
         parsed_intent = models.LLMIntent.model_validate_json(content)
         return parsed_intent
     except (ValidationError, json.JSONDecodeError) as val_err:
@@ -949,6 +957,52 @@ def execute_simple_agent_intent(intent: dict) -> dict:
         return {"status": "error", "message": str(e)}
 
 
+
+def save_message_to_db(user_id, conversation_id, sender, content):
+    """Saves a message to the database and links it to a conversation."""
+    db = SessionLocal()
+    try:
+        # 1. Create a new message entry
+        new_message = Message(
+            conversation_id=conversation_id,
+            sender=sender,
+            content=content
+        )
+        db.add(new_message)
+        db.commit()
+    finally:
+        db.close()
+
+# Inside your chat handling function in main.py
+import asyncio
+
+async def generate_ai_response(user_input: str) -> str:
+    """Generates an AI response using the local Ollama LLM."""
+    try:
+        import ollama
+        response = await asyncio.to_thread(
+            ollama.chat,
+            model=OLLAMA_MODEL,
+            messages=[{'role': 'user', 'content': user_input}]
+        )
+        return str(response['message']['content']) if isinstance(response, dict) else str(response.message.content)
+    except Exception as e:
+        logger.error(f"Error generating AI response: {e}")
+        return "I'm sorry, I encountered an error while trying to process your request."
+
+async def handle_chat_input(user_input, current_session_id):
+    # 1. Save user input immediately
+    save_message_to_db(user_id=1, conversation_id=current_session_id, sender="user", content=user_input)
+
+    # 2. Generate the AI response
+    ai_response = await generate_ai_response(user_input)
+
+    # 3. Save the AI response immediately
+    save_message_to_db(user_id=1, conversation_id=current_session_id, sender="ai", content=ai_response)
+    
+    return ai_response
+
+
 def execute_agent_action(action: dict) -> dict:
     """
     Native desktop action executor for the autonomous Computer Use Agent loop.
@@ -1159,7 +1213,7 @@ def assistant_chat(
         )
 
     # 1. Fetch conversational history from the DB (last 5 message exchanges)
-    db_history = []
+    db_history: List[Dict[str, str]] = []
     try:
         past_logs = db.query(database.AssistantLog).order_by(database.AssistantLog.id.desc()).limit(5).all()
         past_logs.reverse()
@@ -1214,7 +1268,7 @@ def assistant_chat(
     action = "none"
     steps = []
     status = "pending"
-    agent_trace = []
+    agent_trace: List[Dict[str, Any]] = []
     max_steps = 6
 
     for step_index in range(max_steps):
@@ -1229,11 +1283,11 @@ def assistant_chat(
             f"Previous actions: {agent_trace if agent_trace else 'none'}"
         )
 
-        ollama_messages = [{"role": "system", "content": build_system_prompt()}]
+        ollama_messages: List[Dict[str, Any]] = [{"role": "system", "content": build_system_prompt()}]
         ollama_messages.extend(db_history)
         ollama_messages.append({"role": "user", "content": loop_context})
 
-        ollama_payload = {
+        ollama_payload: Dict[str, Any] = {
             "model": OLLAMA_MODEL,
             "messages": ollama_messages,
             "stream": False,
